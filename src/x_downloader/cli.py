@@ -366,6 +366,21 @@ def is_auth_related_error(message: str) -> bool:
     )
 
 
+def is_browser_cookie_decrypt_error(message: str) -> bool:
+    lowered = message.lower()
+    return (
+        "failed to decrypt with dpapi" in lowered
+        or "app-bound encryption" in lowered
+        or "failed to decrypt" in lowered and "cookie" in lowered
+    )
+
+
+def build_cookies_fallback_hint(args: argparse.Namespace) -> str:
+    if not args.url:
+        return "--cookies /path/to/cookies.txt"
+    return f'xdl "{args.url}" --cookies /path/to/cookies.txt'
+
+
 def try_download(
     args: argparse.Namespace,
     browser_spec: tuple[str, str] | tuple[str] | None = None,
@@ -426,6 +441,16 @@ def run(args: argparse.Namespace) -> int:
         if "Requested format is not available" in message:
             print(
                 "Download failed: the post may not contain a downloadable video or the format is unavailable.",
+                file=sys.stderr,
+            )
+        elif is_browser_cookie_decrypt_error(message):
+            print(
+                "Download failed: the browser cookies could not be decrypted on this machine.\n"
+                "On Windows, fully quit Chrome and try again. If it still fails, export X/Twitter cookies "
+                f"to a Netscape cookies.txt file and run:\n{build_cookies_fallback_hint(args)}\n"
+                "下载失败：当前机器无法解密浏览器 cookies。\n"
+                "Windows 下请先彻底退出 Chrome 后重试。如果仍然失败，请导出 X/Twitter 的 "
+                f"Netscape cookies.txt 文件，然后执行：\n{build_cookies_fallback_hint(args)}",
                 file=sys.stderr,
             )
         elif is_auth_related_error(message):

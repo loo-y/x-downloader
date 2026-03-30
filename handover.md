@@ -264,3 +264,147 @@
 8. 评估是否要给裁切能力增加更短别名
    - 例如 `--start` / `--end` / `--duration`。
    - 这样命令行输入会更自然，但要权衡与现有参数名的兼容性。
+
+---
+
+# 2026-03-30 Windows 跟进记录
+
+## 1. 本次会话目标 / 当前阶段目标
+
+这次跟进的目标不是新增下载能力，而是把项目在 Windows 上的实际使用链路补完整，主要处理两类问题：
+
+- `python -m pip install -e .` 之后，`xdl` 命令在 PowerShell 中无法直接识别
+- Windows 下通过 Chrome profile 读取 X 登录态时，`yt-dlp` 可能报 `Failed to decrypt with DPAPI`
+
+这次改动仍然属于 CLI 可用性和说明性修复，不是新的产品能力。
+
+## 2. 当前仓库状态
+
+- 当前工作区有 3 个代码/文档改动文件：
+  - `src/x_downloader/cli.py`
+  - `README.md`
+  - `.gitignore`
+- 另外，仓库本地存在未纳入版本控制的 `cookies/x.com_cookies.txt`，用户已明确要求不要提交；目前 `cookies` 已被 `.gitignore` 忽略。
+- 当前仓库还没有把这次 Windows 跟进提交成新 commit。
+
+## 3. 今天实际遇到的问题
+
+- 用户在 Windows PowerShell 中执行 `xdl` 时出现 `The term 'xdl' is not recognized`。
+- 进一步核实后确认：`x-downloader` 已经安装到了 `%USERPROFILE%\.pyenv\pyenv-win\versions\3.14.2\Lib\site-packages`，说明不是包未安装，而是当前 Python 对应的 `Scripts` 目录没有进入 PATH。
+- 用户把 `%USERPROFILE%\.pyenv\pyenv-win\versions\3.14.2\Scripts` 手动加到 PATH 后，`xdl` 可正常调用。
+- 随后用户在 Windows 上执行：
+  - `xdl "<x-url>" --chrome-profile "Profile 7"`
+  出现 `Failed to decrypt with DPAPI`。
+- 这个错误不是“没有登录 X”，而是 `yt-dlp` 读取 Windows Chrome 加密 cookies 时未能完成解密。
+
+## 4. 原因判断与结论
+
+当前判断如下：
+
+- `xdl` 命令不可用的根因不是项目入口配置错误。`pyproject.toml` 里的 `project.scripts` 正常，问题是 Windows PATH 没包含当前 Python 版本的 `Scripts` 目录。
+- Windows 下 `Failed to decrypt with DPAPI` 不是 X 账号状态丢失，而是浏览器 cookies 解密链路失败。
+- 这类问题在 macOS 上不一定出现，但在 Windows + Chrome + `yt-dlp --cookies-from-browser` 组合下更常见。
+- 对终端用户来说，最稳的回退方案仍然是导出 Netscape 格式的 `cookies.txt`，再用 `--cookies`。
+- `document.cookie` 不能替代 `cookies.txt` 导出方案，因为拿不到 `HttpOnly` cookies，无法保证包含 X 登录所需字段。
+
+## 5. 这次已经落地的修复
+
+- `src/x_downloader/cli.py`
+  - 新增 `is_browser_cookie_decrypt_error()`，单独识别 `Failed to decrypt with DPAPI` / `app-bound encryption` 一类报错。
+  - 新增 `build_cookies_fallback_hint()`，在错误提示里直接拼出当前 URL 对应的 `--cookies` 示例命令。
+  - 将浏览器 cookies 解密失败提示改成分行的中英双语说明，明确告诉用户：
+    - 先彻底退出 Chrome 再试
+    - 仍失败时改用 Netscape `cookies.txt`
+
+- `README.md`
+  - 补充 Windows 下 `Failed to decrypt with DPAPI` 的说明。
+  - 明确写出这是浏览器 cookies 解密失败，不等于 X 未登录。
+  - 明确写出 `cookies.txt` 必须是 Netscape cookie file 格式，不能直接用 `document.cookie` 手工保存。
+
+- `.gitignore`
+  - 新增 `cookies` 忽略规则，避免本地导出的 X cookies 文件被误提交。
+
+## 6. 已验证结果
+
+本次实际验证过的内容：
+
+- 项目入口配置检查
+  - 已确认 `pyproject.toml` 中存在 `xdl = "x_downloader.cli:main"`。
+
+- Windows Python 安装位置核实
+  - 用户确认当前解释器为 `%USERPROFILE%\.pyenv\pyenv-win\versions\3.14.2\python.exe`。
+  - 用户确认 `python -m pip show x-downloader` 指向 `3.14.2` 环境。
+
+- `xdl` 命令恢复验证
+  - 用户将 `%USERPROFILE%\.pyenv\pyenv-win\versions\3.14.2\Scripts` 加入 PATH 后，确认 `xdl` 已可正常执行。
+
+- README / CLI 改动后的基础回归
+  - 已运行 `%USERPROFILE%\.pyenv\pyenv-win\versions\3.14.2\python.exe -m x_downloader.cli --help`
+  - 命令执行成功，说明这次对 `cli.py` 的错误提示改动没有破坏 CLI 基础加载。
+
+- `.gitignore` 核查
+  - 已运行 `git check-ignore -v cookies cookies\\*`
+  - 结果显示 `cookies` 目录已被 `.gitignore` 命中。
+
+## 7. 踩过的坑 / 已否定方案 / 关键约束
+
+- 已否定方案：把“`xdl` 不可用”判断成项目入口配置问题。
+  - 实际不是 `console_scripts` 没生成，而是 PATH 没包含当前 Python 版本的 `Scripts` 目录。
+
+- 已否定方案：用 `document.cookie` 手工拼一个 txt 文件代替浏览器导出。
+  - 原因是拿不到 `HttpOnly` cookies，不可靠。
+
+- 关键约束：Windows 下 `yt-dlp` 通过 Chrome 直接读 cookies 仍然受浏览器加密策略影响。
+  - 当前 CLI 只能改进提示，不能在项目内部绕过 Chrome/Windows 的解密限制。
+
+- 关键约束：仓库本地 `cookies/` 下现在已有真实 cookies 文件。
+  - 提交时必须只 add 指定文件，不能使用会误带工作区未跟踪文件的提交方式。
+
+## 8. 接手后如何继续
+
+如果后续继续接手 Windows 兼容性问题，建议按这个顺序：
+
+1. 先确认当前 Python 版本对应的 `Scripts` 目录是否在 PATH
+   - Windows + pyenv-win 常见路径：
+     - `%USERPROFILE%\.pyenv\pyenv-win\versions\<version>\Scripts`
+
+2. 再确认 `xdl` 是否可调用
+   - `xdl --help`
+
+3. 如果命中浏览器 cookies 解密失败，优先让用户尝试：
+   - 完全退出 Chrome
+   - 重新运行 `xdl "<url>" --chrome-profile "<profile>"`
+
+4. 如果仍失败，直接引导到：
+   - `xdl "<url>" --cookies /path/to/cookies.txt`
+
+5. 如需继续优化体验，优先从 `src/x_downloader/cli.py` 的错误分类和提示入手，而不是尝试在项目里自实现 Chrome cookies 解密。
+
+## 9. 当前仍存在的问题 / 边界
+
+- Windows 下直接读取 Chrome cookies 仍然不是 100% 可靠链路。
+- 这次只是把报错和文档改得更明确，没有从根本上解决 Chrome/Windows 的解密限制。
+- README 已补充 Windows 说明，但还没有单独增加“Windows 安装与排障”专门章节。
+- 当前项目仍然没有自动化测试覆盖这类平台相关错误分支。
+
+## 10. 最终想实现的产品目标
+
+长期目标仍然应该是：
+
+- 用户能在各平台上用一条命令稳定下载 X 视频；
+- 普通用户不需要理解 `yt-dlp`、DPAPI、Chrome profile 或 cookies 解密机制；
+- Windows 下遇到浏览器解密限制时，CLI 至少能给出明确、可执行的下一步，而不是只显示底层异常。
+
+## 11. 后续 TODO
+
+1. 补一个更明确的 Windows 使用章节
+   - 包含 PATH、`Scripts` 目录、`cookies.txt` 导出方式和常见报错。
+
+2. 评估是否要增加显式参数或文档示例，支持项目内 `cookies/` 目录用法
+   - 用户当前已经开始把导出的 cookies 放到仓库 `cookies/` 目录里，README 可考虑给出明确示例，但要保留 `.gitignore` 保护。
+
+3. 评估是否要在 `README.md` 中单独列出“为什么不能直接用 `document.cookie`”
+   - 当前已经写了一句，但后续如果用户群体扩大，可能值得单独放进 FAQ。
+
+4. 如果继续做 Windows 实机优化，优先收集更多失败样例
+   - 比如不同 Chrome 版本、不同 profile、是否开启同步、是否仍有 Chrome 后台进程等。

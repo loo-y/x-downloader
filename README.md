@@ -74,6 +74,14 @@ xdl "https://x.com/<user>/status/<tweet_id>" --cookies-from-browser chrome
 xdl "https://x.com/<user>/status/<tweet_id>" --chrome-profile "Profile 5"
 ```
 
+在 Windows 上，如果你看到类似 `Failed to decrypt with DPAPI` 的报错，这通常不是因为你没有登录 X，而是 `yt-dlp` 无法解密 Chrome 的加密 cookies。先彻底退出 Chrome 后重试；如果仍然失败，建议改用导出的 `cookies.txt` 文件：
+
+```bash
+xdl "https://x.com/<user>/status/<tweet_id>" --cookies C:/path/to/cookies.txt
+```
+
+注意：`cookies.txt` 需要是浏览器扩展或其他工具导出的 Netscape cookie file 格式；不能直接用 `document.cookie` 手工保存，因为它通常拿不到 `HttpOnly` 登录 cookies。
+
 先查看本机有哪些 Chrome profiles：
 
 ```bash
@@ -150,5 +158,6 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查
+- Windows 下如果遇到 `Failed to decrypt with DPAPI` 一类错误，通常是浏览器 cookie 解密失败，不等于 X 未登录。此时优先尝试彻底关闭 Chrome；仍失败时，改用导出的 Netscape `cookies.txt` 文件最稳
 - 传入 `--clip-start` / `--clip-end` / `--clip-duration` 时，CLI 会先下载，再调用本机 `ffmpeg` 生成裁切结果；默认会删除刚下载的完整原文件，除非加 `--keep-original`
 - 实际解析、鉴权和下载逻辑由 `yt-dlp` 提供，因此兼容性会跟随 `yt-dlp` 更新
