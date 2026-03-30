@@ -284,7 +284,7 @@
   - `src/x_downloader/cli.py`
   - `README.md`
   - `.gitignore`
-- 另外，仓库本地存在未纳入版本控制的 `cookies/x.com_cookies.txt`，用户已明确要求不要提交；目前 `cookies` 已被 `.gitignore` 忽略。
+- 另外，仓库本地存在未纳入版本控制的 `cookies` 目录和 cookies 文件，用户已明确要求不要提交；目前 `cookies` 已被 `.gitignore` 忽略。
 - 当前仓库还没有把这次 Windows 跟进提交成新 commit。
 
 ## 3. 今天实际遇到的问题
@@ -408,3 +408,162 @@
 
 4. 如果继续做 Windows 实机优化，优先收集更多失败样例
    - 比如不同 Chrome 版本、不同 profile、是否开启同步、是否仍有 Chrome 后台进程等。
+
+---
+
+# 2026-03-30 用户级配置补充记录
+
+## 1. 本次会话目标 / 当前阶段目标
+
+这次补充的目标是解决两个重复输入问题：
+
+- 用户希望设置一次默认下载目录，之后在任意工作目录下执行 `xdl` 都能下载到同一个固定目录
+- 用户希望设置一次默认 `cookies.txt` 路径，之后不必每次都手动传 `--cookies`
+
+这次改动属于 CLI 配置能力补充，仍然是命令行工具体验优化，不是新的下载核心能力。
+
+## 2. 当前仓库状态
+
+- 当前工作区新增改动文件：
+  - `src/x_downloader/cli.py`
+  - `README.md`
+- 本次新增的是用户级配置文件机制；配置文件不放在仓库里，而是放在操作系统用户目录下。
+- 当前设计约定的配置文件路径为：
+  - Windows: `%APPDATA%\x-downloader\config.json`
+
+## 3. 今天实际遇到的问题
+
+- 当前 `xdl` 的默认下载目录是相对路径 `downloads`，实际行为是“相对于当前命令执行目录”。
+- 这意味着用户在不同目录下运行 `xdl` 时，下载结果会散落在不同位置，不符合“设置一次后全局固定”的使用预期。
+- 当前 cookies 读取也依赖用户每次显式传 `--cookies`、`--cookies-from-browser` 或 `--chrome-profile`，在已经有固定 `cookies.txt` 的情况下操作重复。
+
+## 4. 原因判断与结论
+
+当前结论如下：
+
+- 仅靠 `--output-dir` 不足以解决“长期默认目录”问题，因为它是单次命令级参数。
+- 用用户级配置文件保存默认下载目录和默认 cookies 路径，是当前 CLI 最直接、最可控的方案。
+- 这类配置不应写入仓库，也不应依赖当前工作目录；放到 `%APPDATA%\x-downloader\config.json` 更符合 Windows 用户习惯。
+- 运行时优先级应该保持清晰：
+  1. 命令行显式参数
+  2. 用户配置文件
+  3. 最终回退默认值
+
+## 5. 这次已经落地的修复
+
+- `src/x_downloader/cli.py`
+  - 新增 `get_config_path()`、`load_user_config()`、`save_user_config()`，负责读写 `%APPDATA%\x-downloader\config.json`
+  - 新增 `resolve_runtime_defaults()`，在普通下载流程里自动应用已保存的默认下载目录和默认 cookies 文件
+  - 新增 `apply_config_actions()`，处理配置相关命令：
+    - `--set-default-download`
+    - `--clear-default-download`
+    - `--set-default-cookies`
+    - `--clear-default-cookies`
+    - `--show-config`
+  - 保持命令行参数优先级高于配置文件：
+    - 显式传 `-o/--output-dir` 时，不使用保存的默认下载目录
+    - 显式传 `--cookies` 或 `--cookies-from-browser` 时，不使用保存的默认 cookies 文件
+  - 为 `--set-default-cookies` 增加存在性校验，避免把不存在的路径写进配置
+
+- `README.md`
+  - 补充了设置默认下载目录的示例
+  - 补充了设置默认 cookies 文件路径的示例
+  - 补充了 `--show-config` 用法
+  - 补充了配置文件位置和优先级说明
+
+## 6. 已验证结果
+
+本次实际验证过的内容：
+
+- 运行 `python -m x_downloader.cli --help`
+  - 新参数已出现在帮助文本中：
+    - `--set-default-download`
+    - `--clear-default-download`
+    - `--set-default-cookies`
+    - `--clear-default-cookies`
+    - `--show-config`
+
+- 运行 `python -m x_downloader.cli --show-config`
+  - 能正确打印配置文件路径和当前配置内容
+  - 在配置文件不存在时，当前输出为空配置 `{}`，行为正常
+
+- 运行 `python -m x_downloader.cli --set-default-cookies <missing-path>`
+  - 能正确报错 `Invalid arguments: cookies file does not exist: ...`
+  - 说明默认 cookies 配置在写入前已经做文件存在性校验
+
+- 参数帮助兼容性修复
+  - 在 `argparse` 帮助文本中，`%APPDATA%` 需要写成 `%%APPDATA%%`
+  - 该问题已经修复，`--help` 可正常输出
+
+## 7. 踩过的坑 / 已否定方案 / 关键约束
+
+- 已踩坑：直接在 `argparse` help 文本中写 `%APPDATA%`
+  - 原因：`argparse` 会把 `%` 当作格式占位符解析，导致 `ValueError: badly formed help string`
+  - 当前做法：帮助文本中使用 `%%APPDATA%%`，最终显示给用户时仍是 `%APPDATA%`
+
+- 已否定方案：只依赖环境变量来存默认目录
+  - 对开发者可行，但对普通用户不够直观，且不方便为 cookies 路径提供一致的 CLI 设置入口
+
+- 关键约束：默认 cookies 配置当前只支持文件路径
+  - 不会自动保存浏览器 profile 选择，也不会自动持久化 `--cookies-from-browser`
+
+- 关键约束：配置文件属于用户本地状态
+  - 不能写入仓库文档中的真实绝对路径，也不能把具体 cookies 文件路径记录到 handover 里
+
+## 8. 接手后如何继续
+
+如果后续继续完善这套配置功能，建议按这个顺序：
+
+1. 先看 `src/x_downloader/cli.py`
+   - 重点看：
+     - `get_config_path()`
+     - `load_user_config()`
+     - `save_user_config()`
+     - `apply_config_actions()`
+     - `resolve_runtime_defaults()`
+
+2. 再看 `README.md`
+   - 确认用户侧命令示例和优先级说明是否与代码一致
+
+3. 先跑基础命令验证
+   - `xdl --help`
+   - `xdl --show-config`
+
+4. 再做真实配置写入验证
+   - `xdl --set-default-download "D:/Videos/xdl"`
+   - `xdl --set-default-cookies "C:/path/to/cookies.txt"`
+   - `xdl --show-config`
+
+5. 最后验证优先级
+   - 设置默认下载目录后，再显式传 `-o`，确认显式参数能覆盖默认值
+   - 设置默认 cookies 后，再显式传 `--cookies-from-browser`，确认浏览器参数能覆盖默认 cookies 文件
+
+## 9. 当前仍存在的问题 / 边界
+
+- 当前只保存“默认下载目录”和“默认 cookies 文件路径”，没有保存默认 profile、默认代理或默认输出模板。
+- 当前没有增加专门的配置 schema 校验；如果用户手工改坏 `config.json`，程序会回退为空配置。
+- 这次只验证了 `--help`、`--show-config` 和缺失 cookies 文件报错，尚未在本次会话里做完整的“写入配置后执行真实下载”回归。
+
+## 10. 最终想实现的产品目标
+
+长期目标仍然应该是：
+
+- 用户第一次做完基础配置后，之后日常只需要执行一条 `xdl "<url>"` 就能工作；
+- 普通用户不需要每次重新输入下载目录或 cookies 路径；
+- CLI 在保留显式参数控制力的同时，提供接近桌面应用偏好的“记住我的默认设置”体验。
+
+## 11. 后续 TODO
+
+1. 真实验证“保存默认下载目录后执行下载”
+   - 确认未传 `-o` 时，文件确实落到配置文件指定目录
+
+2. 真实验证“保存默认 cookies 后执行下载”
+   - 确认未传 `--cookies` 时，CLI 会自动读取配置中的 cookies 文件
+
+3. 评估是否要支持保存默认浏览器来源
+   - 例如默认保存 `chrome + Profile 7`
+   - 但这需要谨慎设计，避免和当前 `cookies.txt` 优先级冲突
+
+4. 评估是否要增加配置清理/重置说明
+   - 当前已经有 `--clear-default-download` / `--clear-default-cookies`
+   - README 未来可以再补一个“如何重置配置”的专门小节

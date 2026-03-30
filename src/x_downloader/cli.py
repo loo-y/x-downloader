@@ -24,6 +24,35 @@ SUPPORTED_HOSTS = {
 }
 
 
+def get_config_path() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "x-downloader" / "config.json"
+    return Path.home() / ".config" / "x-downloader" / "config.json"
+
+
+def load_user_config() -> dict:
+    config_path = get_config_path()
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_user_config(config: dict) -> Path:
+    config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return config_path
+
+
+def resolve_path_string(path_value: str) -> str:
+    return str(Path(path_value).expanduser().resolve())
+
+
 def get_chrome_root() -> Path:
     system = platform.system()
 
@@ -164,8 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--output-dir",
-        default="downloads",
-        help="Directory to save files into. 保存目录，默认 ./downloads",
+        help="Directory to save files into. 保存目录；未传时优先使用已保存默认值，否则回退到 ./downloads",
     )
     parser.add_argument(
         "-n",
@@ -176,6 +204,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cookies",
         help="Path to a Netscape cookies.txt file for logged-in downloads. cookies.txt 文件路径。",
+    )
+    parser.add_argument(
+        "--set-default-download",
+        help="Save the default download directory to %%APPDATA%%/x-downloader/config.json. 保存默认下载目录。",
+    )
+    parser.add_argument(
+        "--clear-default-download",
+        action="store_true",
+        help="Clear the saved default download directory. 清除已保存的默认下载目录。",
+    )
+    parser.add_argument(
+        "--set-default-cookies",
+        help="Save the default cookies.txt path to %%APPDATA%%/x-downloader/config.json. 保存默认 cookies.txt 路径。",
+    )
+    parser.add_argument(
+        "--clear-default-cookies",
+        action="store_true",
+        help="Clear the saved default cookies.txt path. 清除已保存的默认 cookies.txt 路径。",
+    )
+    parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Print the current user config path and values. 显示当前用户配置路径和内容。",
     )
     parser.add_argument(
         "--cookies-from-browser",
@@ -381,6 +432,60 @@ def build_cookies_fallback_hint(args: argparse.Namespace) -> str:
     return f'xdl "{args.url}" --cookies /path/to/cookies.txt'
 
 
+def show_config(config: dict) -> int:
+    print(f"Config path: {get_config_path()}")
+    if not config:
+        print("{}")
+        return 0
+    print(json.dumps(config, ensure_ascii=False, indent=2))
+    return 0
+
+
+def apply_config_actions(args: argparse.Namespace, config: dict) -> int | None:
+    changed = False
+
+    if args.set_default_download:
+        config["default_download_dir"] = resolve_path_string(args.set_default_download)
+        changed = True
+
+    if args.clear_default_download:
+        config.pop("default_download_dir", None)
+        changed = True
+
+    if args.set_default_cookies:
+        cookies_path = Path(args.set_default_cookies).expanduser().resolve()
+        if not cookies_path.is_file():
+            print(
+                f"Invalid arguments: cookies file does not exist: {cookies_path}",
+                file=sys.stderr,
+            )
+            return 2
+        config["default_cookies"] = str(cookies_path)
+        changed = True
+
+    if args.clear_default_cookies:
+        config.pop("default_cookies", None)
+        changed = True
+
+    if changed:
+        config_path = save_user_config(config)
+        print(f"Saved config to: {config_path}")
+
+    if args.show_config or changed:
+        return show_config(config)
+
+    return None
+
+
+def resolve_runtime_defaults(args: argparse.Namespace, config: dict) -> None:
+    if not args.output_dir:
+        args.output_dir = config.get("default_download_dir") or "downloads"
+    if not args.cookies and not args.cookies_from_browser:
+        default_cookies = config.get("default_cookies")
+        if default_cookies:
+            args.cookies = default_cookies
+
+
 def try_download(
     args: argparse.Namespace,
     browser_spec: tuple[str, str] | tuple[str] | None = None,
@@ -390,6 +495,14 @@ def try_download(
 
 
 def run(args: argparse.Namespace) -> int:
+    config = load_user_config()
+
+    config_result = apply_config_actions(args, config)
+    if config_result is not None:
+        return config_result
+
+    resolve_runtime_defaults(args, config)
+
     if args.list_chrome_profiles:
         return print_chrome_profiles()
 

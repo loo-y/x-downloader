@@ -56,10 +56,32 @@ xdl "https://x.com/Interior/status/463440424141459456"
 xdl "https://x.com/<user>/status/<tweet_id>" -o ./videos
 ```
 
+设置全局默认下载目录（保存到 `%APPDATA%/x-downloader/config.json`）：
+
+```bash
+xdl --set-default-download "D:/Videos/xdl"
+```
+
+设置后，即使你在任意目录下执行 `xdl`，未显式传 `-o` 时也会默认下载到这个目录。
+
 需要登录的帖子：
 
 ```bash
 xdl "https://x.com/<user>/status/<tweet_id>" --cookies ~/Downloads/cookies.txt
+```
+
+设置全局默认 cookies 文件（保存到 `%APPDATA%/x-downloader/config.json`）：
+
+```bash
+xdl --set-default-cookies "C:/path/to/cookies.txt"
+```
+
+设置后，未显式传 `--cookies` 或 `--cookies-from-browser` 时，CLI 会优先使用这个默认 cookies 文件。
+
+查看当前配置：
+
+```bash
+xdl --show-config
 ```
 
 直接读取浏览器登录态：
@@ -141,6 +163,11 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - `-o, --output-dir`：下载目录，默认 `./downloads`
 - `-n, --name-template`：输出文件命名模板
 - `--cookies`：cookies 文件路径
+- `--set-default-download`：保存默认下载目录到用户配置
+- `--clear-default-download`：清除默认下载目录
+- `--set-default-cookies`：保存默认 cookies 文件路径到用户配置
+- `--clear-default-cookies`：清除默认 cookies 文件路径
+- `--show-config`：查看当前用户配置
 - `--cookies-from-browser`：直接从本机浏览器读取 cookies
 - `--chrome-profile`：指定 Chrome profile，比如 `Default`、`Profile 5`
 - `--list-chrome-profiles`：列出本机 Chrome profiles，`*` 表示最近使用，`x` 表示检测到 X 登录态
@@ -157,6 +184,7 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 ## 说明
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
+- 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查
 - Windows 下如果遇到 `Failed to decrypt with DPAPI` 一类错误，通常是浏览器 cookie 解密失败，不等于 X 未登录。此时优先尝试彻底关闭 Chrome；仍失败时，改用导出的 Netscape `cookies.txt` 文件最稳
 - 传入 `--clip-start` / `--clip-end` / `--clip-duration` 时，CLI 会先下载，再调用本机 `ffmpeg` 生成裁切结果；默认会删除刚下载的完整原文件，除非加 `--keep-original`
