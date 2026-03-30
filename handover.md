@@ -17,7 +17,10 @@
   - `handover.md`
 - 本地已经安装过可编辑包，并实际运行过 `xdl`。
 - 当前依赖 `yt-dlp` 的 Python API。
-- 当前自动读取浏览器登录态的实现依赖 macOS 本机 Chrome 数据目录：`~/Library/Application Support/Google/Chrome`。
+- 当前自动读取浏览器登录态已实现多平台 Chrome 数据目录探测：
+  - macOS: `~/Library/Application Support/Google/Chrome`
+  - Windows: `%LOCALAPPDATA%\\Google\\Chrome\\User Data`
+  - Linux: `~/.config/google-chrome` 或 `$XDG_CONFIG_HOME/google-chrome`
 - `downloads/` 目录中已经存在本次验证过程中成功下载的样例视频文件，不是占位文件。
 
 ## 3. 今天实际遇到的问题
@@ -28,6 +31,7 @@
 - 当前环境里没有安装 `yt_dlp`，直接 `import yt_dlp` 会报 `ModuleNotFoundError`。
 - 机器环境里存在失效代理配置，`yt-dlp` 默认继承环境代理后，访问 X API 时出现 `Unable to connect to proxy` / 代理域名解析失败。
 - 即使网络可达，X 的匿名抓取也不稳定，公开帖子在真实测试中出现过 `Bad guest token`，说明仅靠匿名 guest token 不能保证稳定下载。
+- 后续用户补充了 Windows 使用场景，因此需要把原本只按 macOS 写的 Chrome profile 自动识别改成跨平台路径探测。
 
 这些问题直接影响核心能力：用户即使提供了合法 X 帖子链接，也可能因为环境代理或匿名鉴权不稳定而无法下载。
 
@@ -39,6 +43,7 @@
 - 失效代理问题不是 CLI 解析问题，而是 `yt-dlp` 默认会继承系统环境变量中的代理，导致被无效代理配置污染。
 - X 当前的匿名访问不可靠，至少在本次会话的真实测试里出现了 `Bad guest token`，所以浏览器登录态是提升成功率的必要能力。
 - 用户的 Chrome 存在多个 profile，单纯要求用户手工导出 cookies 可用但体验差，因此当前更合理的方案是：默认自动读取本机 Chrome profile，并优先尝试检测到 X 登录态的 profile。
+- 补 Windows 支持不要求先到 Windows 机器上开发；这部分主要是路径与 profile 探测逻辑，能先在 macOS 上完成代码实现，再去 Windows 实机验证。
 - 当前最可信的 profile 选择策略是：
   1. 优先有 X 登录态 cookies 的 profile
   2. 同条件下优先 `last_used`
@@ -61,7 +66,8 @@
   - 支持 `--cookies` 和 `--cookies-from-browser`。
   - 增加 `--chrome-profile` 和 `--list-chrome-profiles`。
   - 默认禁用环境代理继承，除非显式传 `--proxy` 或 `--use-env-proxy`。
-  - 实现 macOS Chrome profile 扫描。
+  - 实现 macOS / Windows / Linux 的 Chrome 根目录探测。
+  - 兼容 `Network/Cookies` 和 `Cookies` 两种 Chromium cookies 数据库位置。
   - 读取 Chrome `Local State` 的 `profile.last_used` 和 `info_cache`。
   - 通过扫描 Cookies 数据库中 `auth_token` / `ct0` / `twid` 判断 profile 是否带 X 登录态。
   - 自动列出 profile，并用 `*` 标记 `last_used`，用 `x` 标记存在 X 登录态。
@@ -96,6 +102,10 @@
   - 成功列出本机 Chrome profiles。
   - 本机检测结果中 `Default` 被标记为 `*x`，表示既是 `last_used`，也检测到 X 登录态 cookies。
 
+- 运行静态平台检查
+  - 已在代码层补齐 Windows / Linux Chrome 数据目录分支。
+  - 本次未在真实 Windows / Linux 机器上执行 `xdl --list-chrome-profiles` 或真实下载。
+
 - 运行内部检查，确认自动候选顺序
   - 当前自动顺序以 `Default` 为第一候选，之后才是其他 profile。
 
@@ -123,8 +133,8 @@
   - 原因：在 Chrome 多账号场景下使用成本高，而且容易选错账号。
   - 当前做法：自动探测本机 Chrome profiles，优先尝试带 X 登录态的 profile。
 
-- 关键约束：当前 profile 自动识别只覆盖 macOS Chrome。
-  - 原因：实现里直接使用了 macOS Chrome 数据目录。
+- 关键约束：虽然当前已补 macOS / Windows / Linux 路径探测，但真实行为只在 macOS 上验证过。
+  - Windows / Linux 仍需要首次实机确认 Chrome profile 目录、Cookies 数据库位置和权限行为。
 
 - 关键约束：profile 是否“已登录 X”的判断是基于 Cookies 数据库里是否存在 `auth_token` / `ct0` / `twid`。
   - 这是经验性判断，不是 X 官方登录状态 API。
@@ -161,7 +171,7 @@
 
 ## 9. 当前仍存在的问题 / 边界
 
-- 当前不是跨平台实现，Chrome profile 自动识别仅按 macOS 处理。
+- 当前已实现跨平台 Chrome 路径探测，但 Windows / Linux 还没有做真实机器验证。
 - 仍然依赖用户本机浏览器里存在有效的 X 登录态 cookies。
 - 仍然依赖 `yt-dlp` 对 X 的兼容性；如果 X 再次改接口，可能需要更新 `yt-dlp` 或调整错误处理。
 - 目前没有单元测试、集成测试或自动化回归测试。
@@ -179,22 +189,26 @@
 
 ## 11. 后续 TODO
 
-1. 给 Chrome profile 自动识别补平台分支
-   - 增加 Windows / Linux 的 Chrome 数据目录支持。
-   - 这样当前自动读取浏览器登录态的逻辑才能真正跨平台。
+1. 在真实 Windows 机器上验证 Chrome profile 自动识别
+   - 重点确认 `%LOCALAPPDATA%\\Google\\Chrome\\User Data`、`Local State`、`Network/Cookies` 是否和当前实现一致。
+   - 做完后才能把 Windows 支持从“代码已实现”升级为“实机已验证”。
 
-2. 为自动回退增加更细的日志
+2. 在真实 Linux 机器上验证 Chrome profile 自动识别
+   - 重点确认 `~/.config/google-chrome` 或 `$XDG_CONFIG_HOME/google-chrome` 的实际行为。
+   - 做完后可进一步确认 Linux 下是否还要兼容 Chromium 路径。
+
+3. 为自动回退增加更细的日志
    - 当前只在回退时打印 `Retrying with Chrome profile: ...`。
    - 后续可以打印更明确的候选来源、是否带 X 登录态、为什么切换。
 
-3. 为真实下载流程补自动化测试策略
+4. 为真实下载流程补自动化测试策略
    - 可以先从纯函数级别的 URL 校验、profile 排序、cookies 状态判断开始。
    - 之后再考虑带 mock 的下载错误回退测试。
 
-4. 评估是否支持更多浏览器的“自动多 profile 回退”
+5. 评估是否支持更多浏览器的“自动多 profile 回退”
    - 目前只有 Chrome 被做成自动探测和优先排序。
    - Edge / Chromium / Brave 仍主要依赖手动参数。
 
-5. 评估是否要增加更明确的“只探测不下载”诊断命令
+6. 评估是否要增加更明确的“只探测不下载”诊断命令
    - 例如输出当前自动候选顺序、每个 profile 是否检测到 X 登录态。
    - 这样排查用户“为什么自动选错账号”会更快。

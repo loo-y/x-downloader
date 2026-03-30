@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import shutil
 import sqlite3
 import sys
@@ -22,7 +24,29 @@ SUPPORTED_HOSTS = {
 
 
 def get_chrome_root() -> Path:
-    return Path.home() / "Library/Application Support/Google/Chrome"
+    system = platform.system()
+
+    if system == "Darwin":
+        return Path.home() / "Library/Application Support/Google/Chrome"
+    if system == "Windows":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "Google/Chrome/User Data"
+        return Path.home() / "AppData/Local/Google/Chrome/User Data"
+    if system == "Linux":
+        config_home = os.environ.get("XDG_CONFIG_HOME")
+        if config_home:
+            return Path(config_home) / "google-chrome"
+        return Path.home() / ".config/google-chrome"
+
+    return Path()
+
+
+def get_profile_cookies_db(profile_dir: Path) -> Path | None:
+    for candidate in (profile_dir / "Network/Cookies", profile_dir / "Cookies"):
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def get_chrome_profiles() -> list[dict]:
@@ -47,8 +71,8 @@ def get_chrome_profiles() -> list[dict]:
     for path in sorted(chrome_root.iterdir()):
         if not path.is_dir():
             continue
-        cookies_db = path / "Cookies"
-        if not cookies_db.exists():
+        cookies_db = get_profile_cookies_db(path)
+        if cookies_db is None:
             continue
         info = info_cache.get(path.name, {})
         profiles.append(
@@ -70,8 +94,8 @@ def get_chrome_profiles() -> list[dict]:
 
 
 def chrome_profile_has_x_auth(profile_dir: Path) -> bool:
-    cookies_db = profile_dir / "Cookies"
-    if not cookies_db.exists():
+    cookies_db = get_profile_cookies_db(profile_dir)
+    if cookies_db is None:
         return False
 
     temp_dir = Path(tempfile.mkdtemp(prefix="xdl-cookie-scan-"))
@@ -112,7 +136,10 @@ def get_auto_browser_specs(args: argparse.Namespace) -> list[tuple[str, str]]:
 def print_chrome_profiles() -> int:
     profiles = get_chrome_profiles()
     if not profiles:
-        print("No local Chrome profiles with a Cookies database were found.", file=sys.stderr)
+        print(
+            f"No local Chrome profiles with a Cookies database were found for {platform.system()}.",
+            file=sys.stderr,
+        )
         return 1
 
     for profile in profiles:
@@ -156,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--chrome-profile",
-        help="Chrome profile directory name such as 'Default' or 'Profile 5'.",
+        help="Chrome profile directory name such as 'Default' or 'Profile 5' on macOS/Windows/Linux.",
     )
     parser.add_argument(
         "--list-chrome-profiles",

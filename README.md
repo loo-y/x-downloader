@@ -11,6 +11,7 @@
 - 可传入 cookies 下载需要登录才能访问的帖子
 - 支持直接从浏览器读取登录 cookies
 - 默认自动读取 Chrome 最近使用的 profile
+- 已实现 macOS / Windows / Linux 的 Chrome 数据目录探测
 - 默认忽略系统环境中的代理变量，避免被失效代理影响
 - 可选保存缩略图和元数据 JSON
 
@@ -44,7 +45,7 @@ xdl "https://x.com/Interior/status/463440424141459456"
 
 默认情况下，如果你没有传 `--cookies` 或 `--cookies-from-browser`，程序会自动尝试读取：
 
-- macOS Chrome 的最近使用 profile
+- 当前平台上的 Chrome 最近使用 profile
 - 找不到 `last_used` 时，回退到最近活跃的 Chrome profile
 
 下载到指定目录：
@@ -124,5 +125,5 @@ xdl "https://x.com/<user>/status/<tweet_id>" --write-thumbnail --write-info-json
 ## 说明
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
-- 当前“自动识别最近打开的 Chrome / 自动回退 profile”逻辑按 macOS 的 Chrome 数据目录实现；如果后续要支持 Windows / Linux，需要补平台分支
+- 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查
 - 实际解析、鉴权和下载逻辑由 `yt-dlp` 提供，因此兼容性会跟随 `yt-dlp` 更新
