@@ -13,6 +13,8 @@
 - 默认自动读取 Chrome 最近使用的 profile
 - 已实现 macOS / Windows / Linux 的 Chrome 数据目录探测
 - 默认忽略系统环境中的代理变量，避免被失效代理影响
+- 支持下载后直接调用 `ffmpeg` 裁切视频或音频片段
+- `xdl --help` 已提供中英双语参数说明
 - 可选保存缩略图和元数据 JSON
 
 ## 安装
@@ -108,6 +110,24 @@ xdl "https://x.com/<user>/status/<tweet_id>" --use-env-proxy
 xdl "https://x.com/<user>/status/<tweet_id>" --write-thumbnail --write-info-json
 ```
 
+下载并裁切前 10 秒：
+
+```bash
+xdl "https://x.com/<user>/status/<tweet_id>" --clip-duration 10
+```
+
+下载并裁切从第 15 秒开始的 30 秒：
+
+```bash
+xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 15 --clip-duration 30
+```
+
+下载并裁切第 20 秒到第 50 秒，同时保留完整原视频：
+
+```bash
+xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --keep-original
+```
+
 ## 常用参数
 
 - `-o, --output-dir`：下载目录，默认 `./downloads`
@@ -121,9 +141,14 @@ xdl "https://x.com/<user>/status/<tweet_id>" --write-thumbnail --write-info-json
 - `--audio-only`：只下载音频
 - `--write-thumbnail`：保存缩略图
 - `--write-info-json`：保存元数据 JSON
+- `--clip-start`：下载后裁切起始时间
+- `--clip-end`：下载后裁切结束时间
+- `--clip-duration`：下载后裁切时长
+- `--keep-original`：裁切后保留完整原文件
 
 ## 说明
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查
+- 传入 `--clip-start` / `--clip-end` / `--clip-duration` 时，CLI 会先下载，再调用本机 `ffmpeg` 生成裁切结果；默认会删除刚下载的完整原文件，除非加 `--keep-original`
 - 实际解析、鉴权和下载逻辑由 `yt-dlp` 提供，因此兼容性会跟随 `yt-dlp` 更新
