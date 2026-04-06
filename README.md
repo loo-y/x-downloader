@@ -1,11 +1,12 @@
 # x-downloader
 
-一个基于 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) 的 X/Twitter 视频下载 CLI。  
-用户提供一条 X post URL，工具会自动抓取并下载其中的视频。
+一个基于 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) 的视频下载 CLI。
+支持 X/Twitter 和 YouTube 平台，用户提供 URL 后自动抓取并下载视频。
 
 ## 功能
 
 - 支持 `x.com` / `twitter.com` 帖子链接
+- 支持 `youtube.com` / `youtu.be` 视频链接
 - 直接复用 `yt-dlp` 的提取和下载能力
 - 可指定输出目录
 - 可传入 cookies 下载需要登录才能访问的帖子
@@ -41,9 +42,20 @@ python3 -m x_downloader.cli "https://x.com/<user>/status/<tweet_id>"
 
 ## 用法
 
+### X/Twitter
+
 ```bash
 xdl "https://x.com/Interior/status/463440424141459456"
 ```
+
+### YouTube
+
+```bash
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+xdl "https://youtu.be/dQw4w9WgXcQ"
+```
+
+### 通用选项
 
 默认情况下，如果你没有传 `--cookies` 或 `--cookies-from-browser`，程序会自动尝试读取：
 

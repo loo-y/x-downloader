@@ -16,12 +16,21 @@ from yt_dlp import DownloadError, YoutubeDL
 
 
 SUPPORTED_HOSTS = {
+    # X/Twitter
     "x.com",
     "www.x.com",
     "twitter.com",
     "www.twitter.com",
     "mobile.twitter.com",
+    # YouTube
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
 }
+
+YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
 
 
 def get_config_path() -> Path:
@@ -187,9 +196,9 @@ def print_chrome_profiles() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="xdl",
-        description="Download videos from an X/Twitter post URL using yt-dlp. 使用 yt-dlp 下载 X/Twitter 帖子视频。",
+        description="Download videos from X/Twitter or YouTube using yt-dlp. 使用 yt-dlp 下载 X/Twitter 或 YouTube 视频。",
     )
-    parser.add_argument("url", nargs="?", help="X/Twitter post URL。X/Twitter 帖子链接。")
+    parser.add_argument("url", nargs="?", help="X/Twitter or YouTube URL。X/Twitter 或 YouTube 链接。")
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -286,15 +295,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def validate_x_url(url: str) -> None:
+def validate_url(url: str) -> str:
+    """Validate URL and return platform type ('x' or 'youtube')."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("URL must start with http:// or https://")
-    if parsed.netloc.lower() not in SUPPORTED_HOSTS:
-        raise ValueError("Only x.com or twitter.com post URLs are supported")
+
+    host = parsed.netloc.lower()
+    if host not in SUPPORTED_HOSTS:
+        raise ValueError("Only x.com, twitter.com, or youtube.com URLs are supported")
+
+    if host in YOUTUBE_HOSTS:
+        return "youtube"
+
     path = parsed.path.strip("/")
     if "/status/" not in f"/{path}/":
-        raise ValueError("URL must point to a specific X/Twitter post")
+        raise ValueError("X/Twitter URL must point to a specific post")
+    return "x"
 
 
 def build_ydl_options(
@@ -507,11 +524,11 @@ def run(args: argparse.Namespace) -> int:
         return print_chrome_profiles()
 
     if not args.url:
-        print("Missing URL. Pass an X/Twitter post URL or use --list-chrome-profiles.", file=sys.stderr)
+        print("Missing URL. Pass an X/Twitter or YouTube URL or use --list-chrome-profiles.", file=sys.stderr)
         return 2
 
     try:
-        validate_x_url(args.url)
+        validate_url(args.url)
     except ValueError as exc:
         print(f"Invalid URL: {exc}", file=sys.stderr)
         return 2

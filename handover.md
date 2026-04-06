@@ -566,4 +566,127 @@
 
 4. 评估是否要增加配置清理/重置说明
    - 当前已经有 `--clear-default-download` / `--clear-default-cookies`
-   - README 未来可以再补一个“如何重置配置”的专门小节
+   - README 未来可以再补一个”如何重置配置”的专门小节
+
+---
+
+# 2026-04-06 YouTube 支持扩展记录
+
+## 1. 本次会话目标 / 当前阶段目标
+
+这次会话的目标是扩展 xdl 支持 YouTube 视频下载，让用户可以用同一条命令和同一套配置系统（默认下载目录、cookies、代理、裁切等）下载 X/Twitter 和 YouTube 两个平台的视频。
+
+这次改动属于功能扩展，不涉及新的下载核心能力，只是放宽 CLI 层的 URL 校验逻辑。
+
+## 2. 当前仓库状态
+
+- 当前工作在 `feature/youtube-support` 分支
+- 改动文件：
+  - `src/x_downloader/cli.py`
+  - `README.md`
+- 改动尚未提交到 main，等待用户验证后再合并
+
+## 3. 今天实际遇到的问题
+
+- 当前 `SUPPORTED_HOSTS` 只包含 `x.com` 和 `twitter.com` 相关域名
+- `validate_x_url()` 强制要求 URL 必须是 X/Twitter 帖子链接，且必须包含 `/status/` 路径
+- 用户希望复用 xdl 的配置系统下载 YouTube 视频，而不是单独使用 yt-dlp
+
+## 4. 原因判断与结论
+
+当前结论如下：
+
+- yt-dlp 本身已完美支持 YouTube，不需要额外的下载逻辑
+- 只需在 CLI 层放宽 URL 校验，允许 YouTube 域名通过
+- YouTube 链接不需要强制 `/status/` 路径校验，只需验证域名即可
+- 可以通过返回平台类型（`x` 或 `youtube`）为后续可能的平台差异化逻辑预留扩展点
+
+## 5. 这次已经落地的修复
+
+- `src/x_downloader/cli.py`
+  - 扩展 `SUPPORTED_HOSTS`，新增 YouTube 域名：`youtube.com`、`www.youtube.com`、`m.youtube.com`、`youtu.be`、`www.youtu.be`
+  - 新增 `YOUTUBE_HOSTS` 常量，用于快速判断 URL 是否为 YouTube
+  - 重命名 `validate_x_url()` 为 `validate_url()`，返回平台类型字符串
+  - 更新 CLI 描述和参数帮助文本，支持中英双语
+  - 更新错误提示信息
+
+- `README.md`
+  - 更新项目描述，支持 X/Twitter 和 YouTube 两个平台
+  - 新增 YouTube 使用示例
+  - 功能列表新增 YouTube 支持
+
+## 6. 已验证结果
+
+本次实际验证过的内容：
+
+- 运行 `python -m x_downloader.cli --help`
+  - CLI 描述已更新为 “Download videos from X/Twitter or YouTube”
+  - 参数帮助已更新为 “X/Twitter or YouTube URL”
+
+- 运行 URL 校验测试
+  - `validate_url('https://www.youtube.com/watch?v=test')` 返回 `'youtube'`
+  - `validate_url('https://youtu.be/abc123')` 返回 `'youtube'`
+  - `validate_url('https://x.com/user/status/123')` 返回 `'x'`
+
+- 运行无效 URL 测试
+  - `xdl “https://example.com/test”` 正确返回 “Only x.com, twitter.com, or youtube.com URLs are supported”
+
+## 7. 踩过的坑 / 已否定方案 / 关键约束
+
+- 无特殊坑点，改动较为直接
+- 关键约束：当前改动在 `feature/youtube-support` 分支，需要用户验证后再合并到 main
+
+## 8. 接手后如何继续
+
+接手时建议按下面顺序进行：
+
+1. 切换到 feature 分支
+   - `git checkout feature/youtube-support`
+
+2. 验证 CLI 基础功能
+   - `xdl --help`
+   - 确认描述和参数帮助已更新
+
+3. 验证 YouTube 下载
+   - `xdl “https://www.youtube.com/watch?v=dQw4w9WgXcQ”`
+   - 确认下载正常完成
+
+4. 验证配置复用
+   - `xdl --set-default-download “D:/Videos”`
+   - `xdl “https://youtu.be/xxx”` 确认下载到指定目录
+
+5. 验证通过后合并到 main
+   - `git checkout main && git merge feature/youtube-support`
+
+## 9. 当前仍存在的问题 / 边界
+
+- 当前改动在 feature 分支，尚未合并到 main
+- YouTube 下载功能尚未进行真实下载验证
+- 当前未针对 YouTube 做特殊处理（如 age-restricted 视频、会员视频等），完全依赖 yt-dlp 默认行为
+
+## 10. 最终想实现的产品目标
+
+长期目标仍然应该是：
+
+- 用户用一条命令就能下载 X/Twitter 和 YouTube 视频
+- 复用同一套配置系统，无需为不同平台重复设置
+- CLI 保持简洁，用户不需要关心底层是哪个平台
+
+## 11. 后续 TODO
+
+1. 真实验证 YouTube 下载
+   - 测试普通 YouTube 视频
+   - 测试 youtu.be 短链接
+   - 测试使用代理下载
+
+2. 验证通过后合并到 main
+   - `git checkout main && git merge feature/youtube-support`
+
+3. 评估是否需要针对 YouTube 的特殊处理
+   - age-restricted 视频
+   - 会员专属内容
+   - 播放列表下载（当前 `noplaylist: True`）
+
+4. 评估是否要支持更多平台
+   - TikTok、Bilibili 等
+   - 需要评估 URL 校验复杂度和维护成本
