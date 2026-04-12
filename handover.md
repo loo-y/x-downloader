@@ -793,3 +793,35 @@
   - Chrome profile 自动探测与回退
   - 下载后裁切
   - 基础自动化回归测试
+
+---
+
+# 2026-04-12 MissAV 支持开发记录
+
+## 1. 本次会话目标 / 当前阶段目标
+
+这次会话的目标是在 `main` 基础上拉新分支，为 `xdl` 增加 MissAV 页面下载支持。
+
+## 2. 当前实现策略
+
+- 当前新分支：`feature/missav-support`
+- MissAV 采用两段式策略：
+  - 先按现有 `yt-dlp` 直连页面逻辑尝试
+  - 遇到 Cloudflare challenge / 403 时，自动回退到本机 Chrome + DevTools 解析真实 HLS `m3u8`
+- 解析到的真实视频流会带着原页面 `Referer` 再交给 `yt-dlp` 下载
+
+## 3. 已确认的站点行为
+
+- MissAV 页面本身可在普通 Chrome 中打开，但直接用 `yt-dlp` 抓页面会被 Cloudflare challenge 拦截
+- 页面脚本里会初始化 `window.hls`
+- 可解析到类似：
+  - `https://surrit.com/.../playlist.m3u8`
+- 该 `m3u8` 只要带原页面 `Referer`，`yt-dlp` 就能正常识别格式
+- 页面存在以下限制，但不影响当前解析思路：
+  - 首次点击播放可能弹广告
+  - 标签页失焦时视频自动暂停
+
+## 4. 当前结论
+
+- MissAV 最稳的下载入口不是页面 URL 本身，而是页面运行后暴露出的 HLS manifest
+- 只要能用本机 Chrome 通过挑战并拿到 `window.hls.url`，后续下载仍可复用现有 `yt-dlp` + clip 流程

@@ -14,6 +14,13 @@ from urllib.parse import urlparse
 
 from yt_dlp import DownloadError, YoutubeDL
 
+from .missav import (
+    MISSAV_HOSTS,
+    MissavResolverError,
+    resolve_video_source,
+    should_use_browser_fallback,
+)
+
 
 SUPPORTED_HOSTS = {
     # X/Twitter
@@ -28,6 +35,9 @@ SUPPORTED_HOSTS = {
     "m.youtube.com",
     "youtu.be",
     "www.youtu.be",
+    # MissAV
+    "missav.ws",
+    "www.missav.ws",
 }
 
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
@@ -196,9 +206,9 @@ def print_chrome_profiles() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="xdl",
-        description="Download videos from X/Twitter or YouTube using yt-dlp. 使用 yt-dlp 下载 X/Twitter 或 YouTube 视频。",
+        description="Download videos from X/Twitter, YouTube, or MissAV using yt-dlp. 使用 yt-dlp 下载 X/Twitter、YouTube 或 MissAV 视频。",
     )
-    parser.add_argument("url", nargs="?", help="X/Twitter or YouTube URL。X/Twitter 或 YouTube 链接。")
+    parser.add_argument("url", nargs="?", help="X/Twitter, YouTube, or MissAV URL。X/Twitter、YouTube 或 MissAV 链接。")
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -296,17 +306,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_url(url: str) -> str:
-    """Validate URL and return platform type ('x' or 'youtube')."""
+    """Validate URL and return platform type ('x', 'youtube', or 'missav')."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("URL must start with http:// or https://")
 
     host = parsed.netloc.lower()
     if host not in SUPPORTED_HOSTS:
-        raise ValueError("Only x.com, twitter.com, or youtube.com URLs are supported")
+        raise ValueError("Only x.com, twitter.com, youtube.com, or missav.ws URLs are supported")
 
     if host in YOUTUBE_HOSTS:
         return "youtube"
+    if host in MISSAV_HOSTS:
+        return "missav"
 
     path = parsed.path.strip("/")
     if "/status/" not in f"/{path}/":
@@ -317,6 +329,7 @@ def validate_url(url: str) -> str:
 def build_ydl_options(
     args: argparse.Namespace,
     browser_spec: tuple[str, str] | tuple[str] | None = None,
+    http_headers: dict[str, str] | None = None,
 ) -> dict:
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -352,6 +365,8 @@ def build_ydl_options(
         # yt-dlp inherits proxy environment variables by default.
         # Force a direct connection unless the user opts into env-based proxies.
         opts["proxy"] = ""
+    if http_headers:
+        opts["http_headers"] = http_headers
 
     return opts
 
@@ -506,9 +521,50 @@ def resolve_runtime_defaults(args: argparse.Namespace, config: dict) -> None:
 def try_download(
     args: argparse.Namespace,
     browser_spec: tuple[str, str] | tuple[str] | None = None,
+    download_url: str | None = None,
+    http_headers: dict[str, str] | None = None,
 ) -> dict:
-    with YoutubeDL(build_ydl_options(args, browser_spec=browser_spec)) as ydl:
-        return ydl.extract_info(args.url, download=True)
+    with YoutubeDL(build_ydl_options(args, browser_spec=browser_spec, http_headers=http_headers)) as ydl:
+        return ydl.extract_info(download_url or args.url, download=True)
+
+
+def try_download_missav(args: argparse.Namespace) -> tuple[dict | None, str]:
+    try:
+        return try_download(args), ""
+    except DownloadError as exc:
+        error_message = str(exc)
+        if not should_use_browser_fallback(error_message):
+            return None, error_message
+
+    print(
+        "MissAV page access was blocked by Cloudflare. Retrying via local Chrome to resolve the video stream...",
+        file=sys.stderr,
+    )
+    try:
+        video_source = resolve_video_source(
+            args.url,
+            proxy=args.proxy,
+            use_env_proxy=args.use_env_proxy,
+        )
+    except MissavResolverError as exc:
+        return None, (
+            "MissAV browser fallback failed: "
+            f"{exc}\n"
+            "请确认本机已安装可用的 Chrome，并且该页面可以在本机 Chrome 中正常打开。"
+        )
+
+    print(f"Resolved MissAV stream URL via local Chrome: {video_source.manifest_url}", file=sys.stderr)
+    try:
+        return (
+            try_download(
+                args,
+                download_url=video_source.manifest_url,
+                http_headers=video_source.http_headers,
+            ),
+            "",
+        )
+    except DownloadError as exc:
+        return None, str(exc)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -524,11 +580,11 @@ def run(args: argparse.Namespace) -> int:
         return print_chrome_profiles()
 
     if not args.url:
-        print("Missing URL. Pass an X/Twitter or YouTube URL or use --list-chrome-profiles.", file=sys.stderr)
+        print("Missing URL. Pass an X/Twitter, YouTube, or MissAV URL or use --list-chrome-profiles.", file=sys.stderr)
         return 2
 
     try:
-        validate_url(args.url)
+        platform_name = validate_url(args.url)
     except ValueError as exc:
         print(f"Invalid URL: {exc}", file=sys.stderr)
         return 2
@@ -538,34 +594,37 @@ def run(args: argparse.Namespace) -> int:
         print(f"Invalid arguments: {exc}", file=sys.stderr)
         return 2
 
-    auto_browser_specs = get_auto_browser_specs(args)
     downloaded_info: dict | None = None
     message = ""
-    if auto_browser_specs:
-        last_error: DownloadError | None = None
-        for index, spec in enumerate(auto_browser_specs):
-            try:
-                if index > 0:
-                    print(
-                        f"Retrying with Chrome profile: {spec[1]}",
-                        file=sys.stderr,
-                    )
-                downloaded_info = try_download(args, browser_spec=spec)
-                break
-            except DownloadError as exc:
-                last_error = exc
-                if not is_auth_related_error(str(exc)):
-                    break
-
-        if downloaded_info is None and last_error is not None:
-            message = str(last_error)
-        elif downloaded_info is None:
-            message = "No Chrome profile could be used for X authentication."
+    if platform_name == "missav":
+        downloaded_info, message = try_download_missav(args)
     else:
-        try:
-            downloaded_info = try_download(args)
-        except DownloadError as exc:
-            message = str(exc)
+        auto_browser_specs = get_auto_browser_specs(args)
+        if auto_browser_specs:
+            last_error: DownloadError | None = None
+            for index, spec in enumerate(auto_browser_specs):
+                try:
+                    if index > 0:
+                        print(
+                            f"Retrying with Chrome profile: {spec[1]}",
+                            file=sys.stderr,
+                        )
+                    downloaded_info = try_download(args, browser_spec=spec)
+                    break
+                except DownloadError as exc:
+                    last_error = exc
+                    if not is_auth_related_error(str(exc)):
+                        break
+
+            if downloaded_info is None and last_error is not None:
+                message = str(last_error)
+            elif downloaded_info is None:
+                message = "No Chrome profile could be used for X authentication."
+        else:
+            try:
+                downloaded_info = try_download(args)
+            except DownloadError as exc:
+                message = str(exc)
 
     if message:
         if "Requested format is not available" in message:
@@ -586,6 +645,12 @@ def run(args: argparse.Namespace) -> int:
         elif is_auth_related_error(message):
             print(
                 "Download failed: X rejected access for this post. The CLI already auto-tried Chrome profiles with X login cookies. Try --chrome-profile 'Profile 5', --cookies-from-browser chrome, or --cookies /path/to/cookies.txt",
+                file=sys.stderr,
+            )
+        elif platform_name == "missav":
+            print(
+                f"Download failed: {message}\n"
+                "MissAV 站点会触发 Cloudflare/播放器脚本限制。CLI 会优先尝试直连，失败后自动改用本机 Chrome 解析真实视频流地址。",
                 file=sys.stderr,
             )
         else:

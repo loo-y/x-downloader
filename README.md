@@ -1,12 +1,13 @@
 # x-downloader
 
 一个基于 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) 的视频下载 CLI。
-支持 X/Twitter 和 YouTube 平台，用户提供 URL 后自动抓取并下载视频。
+支持 X/Twitter、YouTube 和 MissAV 平台，用户提供 URL 后自动抓取并下载视频。
 
 ## 功能
 
 - 支持 `x.com` / `twitter.com` 帖子链接
 - 支持 `youtube.com` / `youtu.be` 视频链接
+- 支持 `missav.ws` 视频详情页链接
 - 直接复用 `yt-dlp` 的提取和下载能力
 - 可指定输出目录
 - 可传入 cookies 下载需要登录才能访问的帖子
@@ -14,6 +15,7 @@
 - 默认自动读取 Chrome 最近使用的 profile
 - 已实现 macOS / Windows / Linux 的 Chrome 数据目录探测
 - 默认忽略系统环境中的代理变量，避免被失效代理影响
+- MissAV 会在命中 Cloudflare/播放器限制时自动回退到本机 Chrome 解析真实视频流地址
 - 支持下载后直接调用 `ffmpeg` 裁切视频或音频片段
 - `xdl --help` 已提供中英双语参数说明
 - 可选保存缩略图和元数据 JSON
@@ -53,6 +55,12 @@ xdl "https://x.com/Interior/status/463440424141459456"
 ```bash
 xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 xdl "https://youtu.be/dQw4w9WgXcQ"
+```
+
+### MissAV
+
+```bash
+xdl "https://missav.ws/cn/dass-648-chinese-subtitle"
 ```
 
 ### 通用选项
@@ -196,6 +204,8 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 ## 说明
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
+- MissAV 页面可能会触发 Cloudflare 校验、首次播放广告或失焦暂停。CLI 默认先尝试直连；若站点拦截页面抓取，会自动调用本机 Chrome 解析真实 HLS 视频流地址，再把该地址交给 `yt-dlp` 下载
+- MissAV 当前实现依赖本机安装可用的 Chrome；如果 CLI 提示 MissAV browser fallback failed，请先确认该页面能在本机 Chrome 中正常打开
 - 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查
 - Windows 下如果遇到 `Failed to decrypt with DPAPI` 一类错误，通常是浏览器 cookie 解密失败，不等于 X 未登录。此时优先尝试彻底关闭 Chrome；仍失败时，改用导出的 Netscape `cookies.txt` 文件最稳

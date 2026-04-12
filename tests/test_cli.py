@@ -15,6 +15,7 @@ class ValidateUrlTests(unittest.TestCase):
             "https://youtu.be/abc123": "youtube",
             "https://x.com/user/status/123": "x",
             "https://twitter.com/user/status/456": "x",
+            "https://missav.ws/cn/dass-648-chinese-subtitle": "missav",
         }
 
         for url, expected in cases.items():
@@ -23,7 +24,7 @@ class ValidateUrlTests(unittest.TestCase):
 
     def test_validate_url_rejects_invalid_inputs(self) -> None:
         cases = {
-            "https://example.com/test": "Only x.com, twitter.com, or youtube.com URLs are supported",
+            "https://example.com/test": "Only x.com, twitter.com, youtube.com, or missav.ws URLs are supported",
             "https://x.com/user/123": "X/Twitter URL must point to a specific post",
             "ftp://youtube.com/watch?v=test": "URL must start with http:// or https://",
         }
@@ -35,10 +36,10 @@ class ValidateUrlTests(unittest.TestCase):
 
 
 class ParserAndRunTests(unittest.TestCase):
-    def test_help_text_mentions_youtube_support(self) -> None:
+    def test_help_text_mentions_supported_platforms(self) -> None:
         help_text = cli.build_parser().format_help()
-        self.assertIn("Download videos from X/Twitter or YouTube", help_text)
-        self.assertIn("X/Twitter or YouTube URL", help_text)
+        self.assertIn("Download videos from X/Twitter, YouTube, or MissAV", help_text)
+        self.assertIn("X/Twitter, YouTube, or MissAV URL", help_text)
 
     def test_run_without_url_prints_updated_guidance(self) -> None:
         args = cli.build_parser().parse_args([])
@@ -49,7 +50,7 @@ class ParserAndRunTests(unittest.TestCase):
                 exit_code = cli.run(args)
 
         self.assertEqual(exit_code, 2)
-        self.assertIn("Missing URL. Pass an X/Twitter or YouTube URL", stderr.getvalue())
+        self.assertIn("Missing URL. Pass an X/Twitter, YouTube, or MissAV URL", stderr.getvalue())
 
 
 if __name__ == "__main__":
