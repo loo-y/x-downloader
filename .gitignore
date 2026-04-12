@@ -9,3 +9,4 @@ src/*.egg-info/
 venv/
 
 cookies
+.omx/
