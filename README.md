@@ -214,6 +214,7 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - MissAV 页面可能会触发 Cloudflare 校验、首次播放广告或失焦暂停。CLI 默认先尝试直连；若站点拦截页面抓取，会自动调用本机 Chrome 解析真实 HLS 视频流地址，再把该地址交给 `yt-dlp` 下载
 - MissAV 下载默认会先探测该视频支持的实际分辨率，并在终端里列出来让你选择；如果你已经传了 `--quality low|medium|high`，则会直接按这个清晰度别名选择对应分辨率
 - `--chrome-profile` 现在也会真正作用于 MissAV fallback：CLI 会基于你指定的 Chrome profile 启动浏览器解析流程
+- 当前 `feature/missav-support` 分支已确认主链路可下载，但文件命名和 `yt-dlp` 临时文件清理仍在继续打磨；如果你在该分支试用，可能会看到不够友好的文件名或残留的 `.part` / `.ytdl` 文件
 - MissAV 当前实现依赖本机安装可用的 Chrome；如果 CLI 提示 MissAV browser fallback failed，请先确认该页面能在本机 Chrome 中正常打开
 - 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查

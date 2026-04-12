@@ -834,3 +834,91 @@
 - `--chrome-profile` 现在会真正参与 MissAV fallback：
   - 会把指定 profile 拷贝到临时 Chrome user-data-dir 后再启动调试会话
   - 这样既能利用目标 profile 的状态，又能尽量避开原 profile 文件锁
+
+---
+
+# 2026-04-12 MissAV 分支当晚实测反馈记录
+
+## 1. 今天实际遇到的问题
+
+用户在 `feature/missav-support` 分支上实测后，确认 MissAV 主链路已经能够下载，但又暴露出两个实际问题：
+
+- 下载后的文件名不够友好
+  - 当前产物会出现类似：
+    - `NA-video-video.mp4`
+  - 这不是扩展名错误，而是基础文件名错误
+  - 该问题会直接影响重复下载时的可读性，后续很容易退化成：
+    - `NA-video-video (1).mp4`
+
+- 下载完成后仍残留 `yt-dlp` 临时文件
+  - 当前用户实际看到了类似：
+    - `NA-playlist-playlist.mp4.part-Frag9.part`
+    - `NA-playlist-playlist.mp4.part`
+    - `NA-playlist-playlist.mp4.ytdl`
+  - 这说明 MissAV 当前虽然能拿到正确流地址，但收尾阶段没有把临时产物清理干净
+
+这两个问题都会直接影响 MissAV 功能的“可交付感”：即使下载成功，输出目录仍显得像半成品，不适合继续扩展到更多页面或重复使用。
+
+## 2. 原因判断与结论
+
+当前判断如下：
+
+- 命名问题的最可能原因不是网页标题本身缺失，而是当前 MissAV 下载路径把 HLS manifest 当成最终下载对象交给 `yt-dlp` 后，输出模板仍沿用了通用字段，导致标题 / uploader 等元数据退化成类似 `playlist`、`video` 或 `NA`
+- 临时文件残留问题的最可能原因是：
+  - 当前 MissAV 下载使用的是 HLS / fragment 下载链路
+  - 下载成功后并没有额外做一次基于最终目标文件名的清理
+  - 因此 `.part`、`.part-Frag*`、`.ytdl` 等中间文件被留在输出目录
+
+当前最可信结论：
+
+- MissAV 的“解析主链路”已经成立
+- 但 MissAV 的“输出收尾质量”还没有完成，至少需要补：
+  1. 用页面标题或可控元数据覆盖默认文件名来源
+  2. 下载完成后清理对应的临时文件
+
+## 3. 这次已经落地但尚未完成收尾的内容
+
+- `feature/missav-support` 当前已经具备：
+  - 页面 URL -> Chrome fallback -> HLS manifest -> `yt-dlp` 下载
+  - 交互式分辨率选择
+  - `--quality low|medium|high`
+  - `--chrome-profile` 真正接入 MissAV fallback
+
+- 但以下内容仍未修：
+  - MissAV 友好文件命名
+  - MissAV 下载后临时文件清理
+
+## 4. 已验证结果
+
+- 用户已明确反馈：
+  - MissAV 当前分支“能下载”
+  - 说明主链路在真实环境中可用
+
+- 但同时也已明确反馈：
+  - 当前输出文件名不理想
+  - 当前会残留 `.part` / `.ytdl` 等临时文件
+
+这些反馈都来自实际运行结果，不是静态判断。
+
+## 5. 当前仍存在的问题 / 边界
+
+- 当前 `feature/missav-support` 还没有合并到 `main`
+- 当前 MissAV 功能仍存在以下已知边界：
+  - 文件命名未使用足够稳定、可读的网页标题命名策略
+  - HLS 下载收尾后仍可能残留临时文件
+  - 尚未做“完整下载结束后目录清洁”的自动化验证
+
+## 6. 后续 TODO
+
+1. 修 MissAV 文件命名
+   - 优先尝试使用页面标题、番号或已解析页面元数据构造输出文件名
+   - 目标是避免 `NA-video-video.mp4` 这类退化命名
+
+2. 修 MissAV 下载后的临时文件清理
+   - 需要在下载成功后识别并清理与最终目标对应的 `.part`、`.part-Frag*`、`.ytdl`
+   - 目标是让输出目录只留下最终成品文件
+
+3. 为上述两项补最小回归验证
+   - 至少要验证：
+     - 最终命名不再退化成 `playlist` / `video` / `NA`
+     - 下载成功后不再留下明显临时文件
