@@ -1,7 +1,7 @@
 [project]
 name = "x-downloader"
 version = "0.1.0"
-description = "CLI tool for downloading videos from X/Twitter posts via yt-dlp"
+description = "CLI tool for downloading videos from X/Twitter and YouTube via yt-dlp"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

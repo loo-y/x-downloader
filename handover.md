@@ -690,3 +690,73 @@
 4. 评估是否要支持更多平台
    - TikTok、Bilibili 等
    - 需要评估 URL 校验复杂度和维护成本
+
+---
+
+# 2026-04-12 合并与基础测试补齐记录
+
+## 1. 本次会话目标 / 当前阶段目标
+
+这次会话的目标有两件事：
+
+- 把 `feature/youtube-support` 分支安全合并回 `main`
+- 给当前 YouTube/X URL 校验和 CLI 帮助文案补最小自动化回归测试
+
+## 2. 当前仓库状态
+
+- `feature/youtube-support` 已提交并 push
+- `main` 已 fast-forward 合并到同一提交
+- 当前 `main` / `origin/main` 都在：
+  - `f101612 Keep OMX runtime state out of repo history`
+
+## 3. 这次已经落地的修复
+
+- `.gitignore`
+  - 新增 `.omx/`
+  - 避免 OMX 运行时状态、日志、计划文件污染工作区
+
+- `pyproject.toml`
+  - 同步项目描述，明确当前 CLI 支持 X/Twitter 和 YouTube
+
+- `tests/test_cli.py`
+  - 新增基于 `unittest` 的最小自动化回归测试
+  - 当前覆盖：
+    - `validate_url()` 对 X / YouTube 的合法链接识别
+    - 非法域名 / 非 X status 链接报错
+    - `--help` 中的 YouTube 文案
+    - 缺少 URL 时的提示文案
+
+## 4. 已验证结果
+
+- `python -m unittest discover -s tests -v`
+  - 4 个测试全部通过
+
+- `python -m py_compile src/x_downloader/cli.py src/x_downloader/__init__.py tests/test_cli.py`
+  - 语法检查通过
+
+- `python -m x_downloader.cli --help`
+  - 仍可正常输出中英双语帮助
+
+- 用户已确认：
+  - YouTube 真实下载已在本机手动验证通过
+
+## 5. 当前结论
+
+- YouTube 支持现在已经：
+  - 合并进 `main`
+  - 与 README / 包描述保持一致
+  - 具备最小自动化回归覆盖
+
+- 当前项目仍然没有完整下载链路的自动化集成测试；
+  但至少 URL 校验和帮助文案不再完全依赖手工回归。
+
+## 6. 后续建议
+
+1. 如果继续增强稳定性，优先补“无网络 / mock 下载”层的单元测试
+   - 例如 `run()` 的参数错误分支
+   - cookies 回退提示
+   - clipping 参数校验
+
+2. 如果准备发版，再决定版本策略
+   - 例如是否从 `0.1.0` 升到 `0.2.0`
+   - 再创建 tag / release notes
