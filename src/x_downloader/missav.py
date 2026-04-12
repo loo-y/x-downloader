@@ -6,6 +6,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -13,14 +14,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import websocket
 
 
 MISSAV_HOSTS = {"missav.ws", "www.missav.ws"}
-CHROME_CANDIDATE_URLS = (
-    "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json",
-)
 CHROME_COMMON_ARGS = (
     "--no-first-run",
     "--no-default-browser-check",
@@ -51,6 +50,18 @@ class MissavVideoSource:
     page_url: str
     http_headers: dict[str, str]
     user_agent: str
+    page_title: str
+    display_id: str
+
+
+@dataclass(frozen=True)
+class MissavQualityOption:
+    option_number: int
+    label: str
+    height: int
+    format_id: str
+    manifest_url: str
+    http_headers: dict[str, str]
 
 
 def is_missav_url(url: str) -> bool:
@@ -93,6 +104,7 @@ def resolve_video_source(
     *,
     proxy: str | None = None,
     use_env_proxy: bool = False,
+    chrome_profile: str | None = None,
     timeout_seconds: float = MISSAV_RESOLVE_TIMEOUT_SECONDS,
 ) -> MissavVideoSource:
     chrome_binary = find_chrome_binary()
@@ -103,6 +115,7 @@ def resolve_video_source(
         chrome_binary=chrome_binary,
         proxy=proxy,
         use_env_proxy=use_env_proxy,
+        chrome_profile=chrome_profile,
         timeout_seconds=timeout_seconds,
     ) as chrome:
         chrome.open(page_url)
@@ -118,7 +131,12 @@ def resolve_video_source(
                 [state.get("hls_url"), *state.get("resource_urls", [])]
             )
             if manifest_url:
-                return build_video_source(page_url, manifest_url, state.get("user_agent") or "")
+                return build_video_source(
+                    page_url,
+                    manifest_url,
+                    state.get("user_agent") or "",
+                    state.get("title") or "",
+                )
 
             if not state.get("challenge_active") and state.get("ready_state") == "complete":
                 if scripts_text is None:
@@ -126,7 +144,12 @@ def resolve_video_source(
                     script_urls = extract_stream_urls_from_scripts(scripts_text)
                     manifest_url = choose_manifest_url(list(script_urls.values()))
                     if manifest_url:
-                        return build_video_source(page_url, manifest_url, state.get("user_agent") or "")
+                        return build_video_source(
+                            page_url,
+                            manifest_url,
+                            state.get("user_agent") or "",
+                            state.get("title") or "",
+                        )
 
                 if state.get("play_button_present") and not clicked_play:
                     chrome.click_play_button()
@@ -139,15 +162,124 @@ def resolve_video_source(
     )
 
 
-def build_video_source(page_url: str, manifest_url: str, user_agent: str) -> MissavVideoSource:
+def build_video_source(page_url: str, manifest_url: str, user_agent: str, page_title: str) -> MissavVideoSource:
     headers = {"Referer": page_url}
     if user_agent:
         headers["User-Agent"] = user_agent
+    display_id = Path(urllib.parse.urlparse(page_url).path.strip("/")).name or "missav"
     return MissavVideoSource(
         manifest_url=manifest_url,
         page_url=page_url,
         http_headers=headers,
         user_agent=user_agent,
+        page_title=page_title,
+        display_id=display_id,
+    )
+
+
+def extract_manifest_formats(
+    video_source: MissavVideoSource,
+    *,
+    proxy: str | None = None,
+    use_env_proxy: bool = False,
+) -> list[MissavQualityOption]:
+    import yt_dlp
+
+    options: dict[str, object] = {
+        "skip_download": True,
+        "quiet": True,
+        "http_headers": video_source.http_headers,
+    }
+    if proxy:
+        options["proxy"] = proxy
+    elif not use_env_proxy:
+        options["proxy"] = ""
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(video_source.manifest_url, download=False)
+
+    formats = info.get("formats") or []
+    quality_options = build_quality_options(formats, video_source.http_headers)
+    if not quality_options:
+        raise MissavResolverError("MissAV resolved an HLS manifest, but no selectable video formats were exposed.")
+    return quality_options
+
+
+def build_quality_options(formats: list[dict], default_headers: dict[str, str]) -> list[MissavQualityOption]:
+    deduped: dict[tuple[int, str], MissavQualityOption] = {}
+    for fmt in formats:
+        height = fmt.get("height")
+        manifest_url = fmt.get("url")
+        format_id = fmt.get("format_id")
+        if not isinstance(height, int) or not manifest_url or not format_id:
+            continue
+        headers = dict(default_headers)
+        headers.update(fmt.get("http_headers") or {})
+        deduped[(height, manifest_url)] = MissavQualityOption(
+            option_number=0,
+            label="",
+            height=height,
+            format_id=str(format_id),
+            manifest_url=str(manifest_url),
+            http_headers=headers,
+        )
+
+    ordered = sorted(deduped.values(), key=lambda item: item.height)
+    label_map = _build_quality_label_map(len(ordered))
+
+    results: list[MissavQualityOption] = []
+    for index, option in enumerate(ordered, start=1):
+        label = label_map.get(index - 1, "")
+        results.append(
+            MissavQualityOption(
+                option_number=index,
+                label=label,
+                height=option.height,
+                format_id=option.format_id,
+                manifest_url=option.manifest_url,
+                http_headers=option.http_headers,
+            )
+        )
+    return results
+
+
+def select_quality_option(options: list[MissavQualityOption], quality: str) -> MissavQualityOption:
+    if not options:
+        raise MissavResolverError("No MissAV formats are available to select from.")
+    return options[_quality_index_for_choice(len(options), quality)]
+
+
+def prompt_for_quality_choice(
+    options: list[MissavQualityOption],
+    *,
+    input_func: Callable[[str], str] = input,
+    output = None,
+) -> MissavQualityOption:
+    if not options:
+        raise MissavResolverError("No MissAV formats are available to choose from.")
+    if output is None:
+        output = sys.stderr
+
+    print("MissAV supports the following resolutions:", file=output)
+    for option in options:
+        alias = f" ({option.label})" if option.label else ""
+        print(f"  {option.option_number}. {option.height}p{alias}", file=output)
+
+    while True:
+        choice = input_func(f"Select a resolution [1-{len(options)}]: ").strip()
+        if choice.isdigit():
+            index = int(choice)
+            for option in options:
+                if option.option_number == index:
+                    return option
+        print("Invalid selection. Please enter one of the listed numbers.", file=output)
+
+
+def build_noninteractive_quality_error(options: list[MissavQualityOption]) -> str:
+    listed = ", ".join(f"{option.height}p" for option in options)
+    return (
+        "MissAV supports multiple resolutions for this video "
+        f"({listed}). Re-run with --quality low|medium|high in non-interactive mode."
     )
 
 
@@ -181,6 +313,20 @@ def find_chrome_binary() -> str | None:
             return str(candidate)
     found = shutil.which("chrome") or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
     return found
+
+
+def get_chrome_user_data_root() -> Path:
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "Google/Chrome/User Data"
+        return Path.home() / "AppData/Local/Google/Chrome/User Data"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/Google/Chrome"
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    if config_home:
+        return Path(config_home) / "google-chrome"
+    return Path.home() / ".config/google-chrome"
 
 
 def _unpack_first_eval_payload(script_text: str) -> str | None:
@@ -228,11 +374,13 @@ class _ChromeDebugSession:
         chrome_binary: str,
         proxy: str | None,
         use_env_proxy: bool,
+        chrome_profile: str | None,
         timeout_seconds: float,
     ) -> None:
         self._chrome_binary = chrome_binary
         self._proxy = proxy
         self._use_env_proxy = use_env_proxy
+        self._chrome_profile = chrome_profile
         self._timeout_seconds = timeout_seconds
         self._profile_dir = Path(tempfile.mkdtemp(prefix="xdl-missav-chrome-"))
         self._port = self._reserve_port()
@@ -336,6 +484,7 @@ class _ChromeDebugSession:
         raise MissavResolverError(f"Chrome runtime evaluation did not return a value: {evaluation}")
 
     def _launch(self) -> None:
+        self._prepare_profile_dir()
         args = [
             self._chrome_binary,
             *CHROME_COMMON_ARGS,
@@ -343,6 +492,8 @@ class _ChromeDebugSession:
             f"--user-data-dir={self._profile_dir}",
             "about:blank",
         ]
+        if self._chrome_profile:
+            args.append(f"--profile-directory={self._chrome_profile}")
         if self._proxy:
             args.append(f"--proxy-server={self._proxy}")
         elif not self._use_env_proxy:
@@ -354,6 +505,40 @@ class _ChromeDebugSession:
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             text=True,
+        )
+
+    def _prepare_profile_dir(self) -> None:
+        if not self._chrome_profile:
+            return
+
+        chrome_root = get_chrome_user_data_root()
+        source_profile_dir = chrome_root / self._chrome_profile
+        if not source_profile_dir.exists():
+            raise MissavResolverError(
+                f"Chrome profile '{self._chrome_profile}' was not found under {chrome_root}."
+            )
+
+        local_state = chrome_root / "Local State"
+        if local_state.exists():
+            _safe_copy2(local_state, self._profile_dir / "Local State")
+
+        shutil.copytree(
+            source_profile_dir,
+            self._profile_dir / self._chrome_profile,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                "Cache",
+                "Code Cache",
+                "GPUCache",
+                "GrShaderCache",
+                "GraphiteDawnCache",
+                "DawnCache",
+                "Crashpad",
+                "Service Worker\\CacheStorage",
+                "Media Cache",
+                "VideoDecodeStats",
+            ),
+            copy_function=_safe_copy2,
         )
 
     def _wait_for_devtools(self) -> str:
@@ -412,3 +597,33 @@ class _ChromeDebugSession:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             return int(sock.getsockname()[1])
+
+
+def _build_quality_label_map(count: int) -> dict[int, str]:
+    if count <= 0:
+        return {}
+    if count == 1:
+        return {0: "high"}
+    labels = {0: "low", count - 1: "high"}
+    if count >= 3:
+        labels[count // 2] = "medium"
+    return labels
+
+
+def _quality_index_for_choice(count: int, quality: str) -> int:
+    if count <= 1:
+        return 0
+    if quality == "low":
+        return 0
+    if quality == "high":
+        return count - 1
+    if quality == "medium":
+        return count // 2
+    raise MissavResolverError("Unsupported MissAV quality selection.")
+
+
+def _safe_copy2(src: str | Path, dst: str | Path) -> str:
+    try:
+        return shutil.copy2(src, dst)
+    except PermissionError:
+        return str(dst)

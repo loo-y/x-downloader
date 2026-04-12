@@ -63,6 +63,12 @@ xdl "https://youtu.be/dQw4w9WgXcQ"
 xdl "https://missav.ws/cn/dass-648-chinese-subtitle"
 ```
 
+如果你不想在下载前交互选择分辨率，可以直接传：
+
+```bash
+xdl "https://missav.ws/cn/dass-648-chinese-subtitle" --quality high
+```
+
 ### 通用选项
 
 默认情况下，如果你没有传 `--cookies` 或 `--cookies-from-browser`，程序会自动尝试读取：
@@ -192,6 +198,7 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - `--chrome-profile`：指定 Chrome profile，比如 `Default`、`Profile 5`
 - `--list-chrome-profiles`：列出本机 Chrome profiles，`*` 表示最近使用，`x` 表示检测到 X 登录态
 - `--proxy`：代理地址
+- `--quality`：MissAV 清晰度偏好，可选 `low` / `medium` / `high`
 - `--use-env-proxy`：使用环境变量中的代理配置
 - `--audio-only`：只下载音频
 - `--write-thumbnail`：保存缩略图
@@ -205,6 +212,8 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 
 - X 上的受保护内容、仅登录可见内容，或者遇到 guest token 问题时，CLI 会优先尝试“有 X 登录态”的 Chrome profile，再按最近活跃顺序自动回退；不对时再用 `--chrome-profile` 手动切换
 - MissAV 页面可能会触发 Cloudflare 校验、首次播放广告或失焦暂停。CLI 默认先尝试直连；若站点拦截页面抓取，会自动调用本机 Chrome 解析真实 HLS 视频流地址，再把该地址交给 `yt-dlp` 下载
+- MissAV 下载默认会先探测该视频支持的实际分辨率，并在终端里列出来让你选择；如果你已经传了 `--quality low|medium|high`，则会直接按这个清晰度别名选择对应分辨率
+- `--chrome-profile` 现在也会真正作用于 MissAV fallback：CLI 会基于你指定的 Chrome profile 启动浏览器解析流程
 - MissAV 当前实现依赖本机安装可用的 Chrome；如果 CLI 提示 MissAV browser fallback failed，请先确认该页面能在本机 Chrome 中正常打开
 - 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查

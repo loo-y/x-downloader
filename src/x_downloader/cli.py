@@ -17,7 +17,11 @@ from yt_dlp import DownloadError, YoutubeDL
 from .missav import (
     MISSAV_HOSTS,
     MissavResolverError,
+    build_noninteractive_quality_error,
+    extract_manifest_formats,
+    prompt_for_quality_choice,
     resolve_video_source,
+    select_quality_option,
     should_use_browser_fallback,
 )
 
@@ -264,6 +268,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--proxy",
         help="Proxy URL to pass through to yt-dlp, e.g. http://127.0.0.1:7890。代理地址。",
+    )
+    parser.add_argument(
+        "--quality",
+        choices=["low", "medium", "high"],
+        help="Preferred quality for MissAV downloads: low / medium / high。MissAV 清晰度偏好。",
     )
     parser.add_argument(
         "--use-env-proxy",
@@ -545,6 +554,7 @@ def try_download_missav(args: argparse.Namespace) -> tuple[dict | None, str]:
             args.url,
             proxy=args.proxy,
             use_env_proxy=args.use_env_proxy,
+            chrome_profile=args.chrome_profile,
         )
     except MissavResolverError as exc:
         return None, (
@@ -553,13 +563,34 @@ def try_download_missav(args: argparse.Namespace) -> tuple[dict | None, str]:
             "请确认本机已安装可用的 Chrome，并且该页面可以在本机 Chrome 中正常打开。"
         )
 
-    print(f"Resolved MissAV stream URL via local Chrome: {video_source.manifest_url}", file=sys.stderr)
+    try:
+        quality_options = extract_manifest_formats(
+            video_source,
+            proxy=args.proxy,
+            use_env_proxy=args.use_env_proxy,
+        )
+    except MissavResolverError as exc:
+        return None, f"MissAV stream probing failed: {exc}"
+
+    if args.quality:
+        selected_quality = select_quality_option(quality_options, args.quality)
+    else:
+        if not sys.stdin.isatty():
+            return None, build_noninteractive_quality_error(quality_options)
+        selected_quality = prompt_for_quality_choice(quality_options)
+
+    print(
+        f"Resolved MissAV stream URL via local Chrome: {video_source.manifest_url}\n"
+        f"Selected MissAV quality: {selected_quality.height}p"
+        f"{f' ({selected_quality.label})' if selected_quality.label else ''}",
+        file=sys.stderr,
+    )
     try:
         return (
             try_download(
                 args,
-                download_url=video_source.manifest_url,
-                http_headers=video_source.http_headers,
+                download_url=selected_quality.manifest_url,
+                http_headers=selected_quality.http_headers,
             ),
             "",
         )

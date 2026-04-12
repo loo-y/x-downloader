@@ -825,3 +825,12 @@
 
 - MissAV 最稳的下载入口不是页面 URL 本身，而是页面运行后暴露出的 HLS manifest
 - 只要能用本机 Chrome 通过挑战并拿到 `window.hls.url`，后续下载仍可复用现有 `yt-dlp` + clip 流程
+
+## 5. 后续补充
+
+- MissAV 现在新增了交互式清晰度选择：
+  - 不传 `--quality` 时，CLI 会列出当前视频支持的分辨率并要求用户选择
+  - 传 `--quality low|medium|high` 时，CLI 会跳过交互，直接选对应档位
+- `--chrome-profile` 现在会真正参与 MissAV fallback：
+  - 会把指定 profile 拷贝到临时 Chrome user-data-dir 后再启动调试会话
+  - 这样既能利用目标 profile 的状态，又能尽量避开原 profile 文件锁
