@@ -105,14 +105,15 @@ def resolve_video_source(
     proxy: str | None = None,
     use_env_proxy: bool = False,
     chrome_profile: str | None = None,
+    chrome_binary: str | None = None,
     timeout_seconds: float = MISSAV_RESOLVE_TIMEOUT_SECONDS,
 ) -> MissavVideoSource:
-    chrome_binary = find_chrome_binary()
-    if chrome_binary is None:
+    resolved_chrome_binary = chrome_binary or find_chrome_binary()
+    if resolved_chrome_binary is None:
         raise MissavResolverError("Chrome was not found on this machine, so MissAV browser fallback cannot start.")
 
     with _ChromeDebugSession(
-        chrome_binary=chrome_binary,
+        chrome_binary=resolved_chrome_binary,
         proxy=proxy,
         use_env_proxy=use_env_proxy,
         chrome_profile=chrome_profile,
@@ -302,6 +303,7 @@ def find_chrome_binary() -> str | None:
         candidates.extend(
             [
                 Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                Path("/usr/bin/chromium"),
                 Path("/usr/bin/google-chrome"),
                 Path("/usr/bin/google-chrome-stable"),
                 Path("/snap/bin/chromium"),
@@ -488,6 +490,7 @@ class _ChromeDebugSession:
         args = [
             self._chrome_binary,
             *CHROME_COMMON_ARGS,
+            "--headless=new",
             f"--remote-debugging-port={self._port}",
             f"--user-data-dir={self._profile_dir}",
             "about:blank",

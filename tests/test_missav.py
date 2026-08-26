@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import io
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from x_downloader.api import validate_credential
 from x_downloader.missav import (
-    build_video_source,
     build_noninteractive_quality_error,
     build_quality_options,
+    build_video_source,
     choose_manifest_url,
     extract_stream_urls_from_scripts,
     prompt_for_quality_choice,
@@ -112,6 +115,16 @@ class MissavHelperTests(unittest.TestCase):
         self.assertIn("720p", message)
         self.assertIn("--quality low|medium|high", message)
 
+    def test_validate_x_cookie_file_requires_login_fields(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "cookies.txt"
+            path.write_text(
+                "# Netscape HTTP Cookie File\n"
+                ".x.com\tTRUE\t/\tTRUE\t0\tauth_token\tabcdef\n"
+                ".x.com\tTRUE\t/\tTRUE\t0\tct0\t123456\n",
+                encoding="utf-8",
+            )
+            result = validate_credential("x", str(path))
 
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(result.state, "valid")
+        self.assertEqual(result.checked_fields, ["auth_token", "ct0"])

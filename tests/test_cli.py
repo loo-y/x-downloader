@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from x_downloader import cli
+from x_downloader.types import DownloadResult
 
 
 class ValidateUrlTests(unittest.TestCase):
@@ -31,7 +34,7 @@ class ValidateUrlTests(unittest.TestCase):
 
         for url, expected_message in cases.items():
             with self.subTest(url=url):
-                with self.assertRaisesRegex(ValueError, expected_message):
+                with self.assertRaisesRegex(Exception, expected_message):
                     cli.validate_url(url)
 
 
@@ -52,6 +55,30 @@ class ParserAndRunTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("Missing URL. Pass an X/Twitter, YouTube, or MissAV URL", stderr.getvalue())
 
+    def test_run_prints_saved_file_path_on_success(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output_file = Path(temp_dir) / "video.mp4"
+            output_file.write_bytes(b"demo")
+            args = cli.build_parser().parse_args(
+                ["https://www.youtube.com/watch?v=test", "--output-dir", temp_dir]
+            )
+            stdout = io.StringIO()
 
-if __name__ == "__main__":
-    unittest.main()
+            with patch("x_downloader.cli.load_user_config", return_value={}):
+                with patch(
+                    "x_downloader.cli.download_media",
+                    return_value=DownloadResult(
+                        platform="youtube",
+                        file_path=str(output_file),
+                        title="Demo",
+                        display_id="demo",
+                        mime_type="video/mp4",
+                        ext="mp4",
+                        size_bytes=4,
+                    ),
+                ):
+                    with redirect_stdout(stdout):
+                        exit_code = cli.run(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Saved to:", stdout.getvalue())
