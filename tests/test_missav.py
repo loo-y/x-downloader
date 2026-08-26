@@ -128,3 +128,17 @@ class MissavHelperTests(unittest.TestCase):
 
         self.assertEqual(result.state, "valid")
         self.assertEqual(result.checked_fields, ["auth_token", "ct0"])
+
+    def test_validate_x_cookie_file_accepts_netscape_httponly_rows(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "cookies.txt"
+            path.write_text(
+                "# Netscape HTTP Cookie File\n"
+                "#HttpOnly_.x.com\tTRUE\t/\tTRUE\t0\tauth_token\tabcdef\n"
+                ".x.com\tTRUE\t/\tTRUE\t0\tct0\t123456\n",
+                encoding="utf-8",
+            )
+            result = validate_credential("x", str(path))
+
+        self.assertEqual(result.state, "valid")
+        self.assertEqual(result.checked_fields, ["auth_token", "ct0"])

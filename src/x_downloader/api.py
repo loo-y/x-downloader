@@ -439,7 +439,11 @@ def _load_cookie_rows(path: Path) -> list[tuple[str, str, str]]:
 
     rows: list[tuple[str, str, str]] = []
     for line in lines:
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line.removeprefix("#HttpOnly_")
+        elif line.startswith("#"):
             continue
         parts = line.split("\t")
         if len(parts) < 7:
