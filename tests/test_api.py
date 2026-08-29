@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from x_downloader import api
-from x_downloader.types import DownloadRequest, FormatOption, ResolvedMedia
+from x_downloader.types import DownloadRequest, FormatOption, ResolveRequest, ResolvedMedia
 
 
 class FormatMetadataTests(unittest.TestCase):
@@ -80,6 +80,17 @@ class FormatMetadataTests(unittest.TestCase):
 
 
 class DownloadPlanTests(unittest.TestCase):
+    def test_resolve_options_do_not_require_download_selection_mode(self) -> None:
+        options = api._build_ydl_options(
+            ResolveRequest(url="https://x.com/example/status/1"),
+            output_dir=None,
+            http_headers=None,
+            download=False,
+        )
+
+        self.assertTrue(options["skip_download"])
+        self.assertNotIn("format", options)
+
     def test_video_with_audio_mode_merges_audio_for_video_only_format(self) -> None:
         expression = api._build_format_expression("VIDEO_WITH_AUDIO", _format_option("137", "VIDEO_ONLY", height=1080))
         self.assertEqual(expression, "137+bestaudio/best")

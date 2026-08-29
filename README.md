@@ -47,7 +47,7 @@ python3 -m x_downloader.cli "https://x.com/<user>/status/<tweet_id>"
 
 ## 用法
 
-## Python 公共 API（v0.3.1）
+## Python 公共 API（v0.3.2）
 
 服务端集成应使用结构化 API，不解析 CLI 输出或 yt-dlp stderr：
 
@@ -272,6 +272,7 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - v0.3.1 起，`VIDEO_ONLY` 格式在默认 `VIDEO_WITH_AUDIO` 模式下会自动使用 `format_id+bestaudio/best` 合并最佳音频；显式 `VIDEO_ONLY` 才会保留无声流
 - v0.3.1 起，`AUDIO_ONLY` 模式会优先使用调用方选择的音频 `format_id`；如未提供，则回退到 `bestaudio/best`
 - v0.3.1 起，下载完成需要可用的 `ffprobe` 才能返回最终媒体轨道信息
+- v0.3.2 修复解析请求错误读取下载规格、导致 CLI 与 NestDeck 在识别链接时崩溃的问题
 - MissAV 当前实现依赖本机安装可用的 Chrome；如果 CLI 提示 MissAV browser fallback failed，请先确认该页面能在本机 Chrome 中正常打开
 - 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查

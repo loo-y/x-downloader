@@ -442,8 +442,9 @@ def _build_ydl_options(
         "writeinfojson": False,
         "restrictfilenames": False,
         "merge_output_format": "mp4",
-        "format": _default_format_expression(request.selection_mode),
     }
+    if isinstance(request, DownloadRequest):
+        opts["format"] = _default_format_expression(request.selection_mode)
     opts = {key: value for key, value in opts.items() if value is not None}
 
     if request.cookie_file:

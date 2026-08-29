@@ -1,6 +1,6 @@
 [project]
 name = "x-downloader"
-version = "0.3.1"
+version = "0.3.2"
 description = "Structured download library and CLI for X/Twitter, YouTube, and MissAV via yt-dlp"
 readme = "README.md"
 requires-python = ">=3.10"
