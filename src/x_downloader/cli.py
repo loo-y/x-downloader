@@ -171,6 +171,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("url", nargs="?", help="X/Twitter, YouTube, or MissAV URL。X/Twitter、YouTube 或 MissAV 链接。")
     parser.add_argument("-o", "--output-dir", help="Directory to save files into. 保存目录；未传时优先使用已保存默认值，否则回退到 ./downloads")
     parser.add_argument("-n", "--name-template", default="%(uploader)s-%(id)s-%(title).80B.%(ext)s", help="yt-dlp output template for the filename. 文件名模板。")
+    parser.add_argument("--format-id", help="Exact yt-dlp format id to download. 精确指定 yt-dlp format id。")
+    parser.add_argument("--selection-mode", choices=["video-with-audio", "video-only", "audio-only"], help="Download selection mode. 下载模式：带音频视频 / 仅视频 / 仅音频。")
     parser.add_argument("--cookies", help="Path to a Netscape cookies.txt file for logged-in downloads. cookies.txt 文件路径。")
     parser.add_argument("--set-default-download", help="Save the default download directory to %%APPDATA%%/x-downloader/config.json. 保存默认下载目录。")
     parser.add_argument("--clear-default-download", action="store_true", help="Clear the saved default download directory. 清除已保存的默认下载目录。")
@@ -183,7 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--proxy", help="Proxy URL to pass through to yt-dlp, e.g. http://127.0.0.1:7890。代理地址。")
     parser.add_argument("--quality", choices=["low", "medium", "high"], help="Preferred quality for MissAV downloads: low / medium / high。MissAV 清晰度偏好。")
     parser.add_argument("--use-env-proxy", action="store_true", help="Honor proxy environment variables instead of forcing a direct connection. 使用环境变量中的代理。")
-    parser.add_argument("--audio-only", action="store_true", help="Download audio only instead of the full video. 仅下载音频。")
+    parser.add_argument("--audio-only", action="store_true", help="Compatibility flag for --selection-mode audio-only. 兼容参数，等同于 --selection-mode audio-only。")
+    parser.add_argument("--video-only", action="store_true", help="Compatibility flag for --selection-mode video-only. 兼容参数，等同于 --selection-mode video-only。")
     parser.add_argument("--write-thumbnail", action="store_true", help="Compatibility flag kept for CLI stability; metadata assets are managed by callers. 保留兼容参数。")
     parser.add_argument("--write-info-json", action="store_true", help="Compatibility flag kept for CLI stability; metadata JSON is not emitted by the library path. 保留兼容参数。")
     parser.add_argument("--clip-start", help="Clip start time after download, e.g. 10, 00:00:10, or 1:23。下载后裁切起始时间。")
@@ -271,15 +274,28 @@ def _build_download_request(args: argparse.Namespace) -> DownloadRequest:
             cookies_from_browser = ("chrome", args.chrome_profile)
         else:
             cookies_from_browser = (args.cookies_from_browser,)
+    selection_mode = "VIDEO_WITH_AUDIO"
+    if args.selection_mode:
+        selection_mode = {
+            "video-with-audio": "VIDEO_WITH_AUDIO",
+            "video-only": "VIDEO_ONLY",
+            "audio-only": "AUDIO_ONLY",
+        }[args.selection_mode]
+    if args.audio_only:
+        selection_mode = "AUDIO_ONLY"
+    if args.video_only:
+        selection_mode = "VIDEO_ONLY"
     return DownloadRequest(
         url=args.url,
         output_dir=args.output_dir,
+        format_id=args.format_id,
+        selection_mode=selection_mode,
         cookie_file=args.cookies,
         proxy=args.proxy,
         use_env_proxy=args.use_env_proxy,
         cookies_from_browser=cookies_from_browser,
         chrome_profile=args.chrome_profile,
-        audio_only=args.audio_only,
+        audio_only=args.audio_only or None,
         quality=args.quality,
         name_template=args.name_template,
         clip_start=args.clip_start,
@@ -302,6 +318,10 @@ def run(args: argparse.Namespace) -> int:
 
     if not args.url:
         print("Missing URL. Pass an X/Twitter, YouTube, or MissAV URL or use --list-chrome-profiles.", file=sys.stderr)
+        return 2
+
+    if args.audio_only and args.video_only:
+        print("Invalid arguments: --audio-only and --video-only cannot be used together", file=sys.stderr)
         return 2
 
     try:

@@ -16,7 +16,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import websocket
+try:
+    import websocket
+except ModuleNotFoundError:  # pragma: no cover - exercised only in dependency-missing environments.
+    websocket = None
 
 
 MISSAV_HOSTS = {"missav.ws", "www.missav.ws"}
@@ -393,6 +396,8 @@ class _ChromeDebugSession:
         self._target_id: str | None = None
 
     def __enter__(self) -> "_ChromeDebugSession":
+        if websocket is None:
+            raise MissavResolverError("websocket-client is required for MissAV browser fallback but is not installed.")
         self._launch()
         browser_ws_url = self._wait_for_devtools()
         self._browser_socket = websocket.create_connection(browser_ws_url, timeout=self._timeout_seconds)

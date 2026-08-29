@@ -17,6 +17,9 @@
 - 默认忽略系统环境中的代理变量，避免被失效代理影响
 - MissAV 会在命中 Cloudflare/播放器限制时自动回退到本机 Chrome 解析真实视频流地址
 - 支持下载后直接调用 `ffmpeg` 裁切视频或音频片段
+- 结构化格式元数据区分 `MUXED` / `VIDEO_ONLY` / `AUDIO_ONLY`
+- 支持 `selection_mode` 与精确 `format_id`，可显式下载音频、无声视频或自动补最佳音频
+- 下载完成后会调用 `ffprobe` 回填实际音视频轨道、编码、尺寸与时长
 - `xdl --help` 已提供中英双语参数说明
 - 可选保存缩略图和元数据 JSON
 
@@ -44,7 +47,7 @@ python3 -m x_downloader.cli "https://x.com/<user>/status/<tweet_id>"
 
 ## 用法
 
-## Python 公共 API（v0.3.0）
+## Python 公共 API（v0.3.1）
 
 服务端集成应使用结构化 API，不解析 CLI 输出或 yt-dlp stderr：
 
@@ -57,6 +60,8 @@ result = download_media(
     DownloadRequest(
         url="https://x.com/user/status/123",
         output_dir=Path("/data/video-downloader/temp/job-123"),
+        format_id="137",
+        selection_mode="VIDEO_WITH_AUDIO",
     )
 )
 ```
@@ -64,6 +69,16 @@ result = download_media(
 公共入口包括 `validate_url()`、`validate_credential()`、`resolve_media()`、
 `download_media()` 和 `resolve_missav_stream()`。NestDeck runner 使用 stdin 单条 JSON、
 stdout NDJSON；Cookie、代理认证和临时媒体 URL 不应写入普通日志。
+
+`resolve_media()` 返回的 `FormatOption` 现在包含：
+
+- `format_kind`：`MUXED` / `VIDEO_ONLY` / `AUDIO_ONLY`
+- `video_codec`、`audio_codec`
+- `video_bitrate_kbps`、`audio_bitrate_kbps`
+- `width`、`height`、`fps`、`file_size_bytes`
+
+`download_media()` 返回的 `DownloadResult` 会包含下载后 `ffprobe` 探测得到的
+`has_video`、`has_audio`、编码、尺寸、时长和文件大小；调用方不应再仅依赖下载前的格式声明。
 
 ### X/Twitter
 
@@ -187,6 +202,21 @@ xdl "https://x.com/<user>/status/<tweet_id>" --use-env-proxy
 xdl "https://x.com/<user>/status/<tweet_id>" --write-thumbnail --write-info-json
 ```
 
+显式选择下载模式和格式：
+
+```bash
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format-id 137 --selection-mode video-with-audio
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format-id 137 --selection-mode video-only
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format-id 140 --selection-mode audio-only
+```
+
+兼容旧参数：
+
+```bash
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-only
+xdl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --video-only
+```
+
 下载并裁切前 10 秒：
 
 ```bash
@@ -221,7 +251,10 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - `--proxy`：代理地址
 - `--quality`：MissAV 清晰度偏好，可选 `low` / `medium` / `high`
 - `--use-env-proxy`：使用环境变量中的代理配置
-- `--audio-only`：只下载音频
+- `--format-id`：精确指定 yt-dlp `format_id`
+- `--selection-mode`：下载模式，可选 `video-with-audio` / `video-only` / `audio-only`
+- `--audio-only`：兼容参数，等同于 `--selection-mode audio-only`
+- `--video-only`：兼容参数，等同于 `--selection-mode video-only`
 - `--write-thumbnail`：保存缩略图
 - `--write-info-json`：保存元数据 JSON
 - `--clip-start`：下载后裁切起始时间
@@ -236,6 +269,9 @@ xdl "https://x.com/<user>/status/<tweet_id>" --clip-start 20 --clip-end 50 --kee
 - MissAV 下载默认会先探测该视频支持的实际分辨率，并在终端里列出来让你选择；如果你已经传了 `--quality low|medium|high`，则会直接按这个清晰度别名选择对应分辨率
 - `--chrome-profile` 现在也会真正作用于 MissAV fallback：CLI 会基于你指定的 Chrome profile 启动浏览器解析流程
 - v0.3.0 将 X、YouTube 与 MissAV 统一到结构化解析和下载 API；调用方仍应在取消、失败或进程中断后清理 `.part` / `.ytdl` 临时文件
+- v0.3.1 起，`VIDEO_ONLY` 格式在默认 `VIDEO_WITH_AUDIO` 模式下会自动使用 `format_id+bestaudio/best` 合并最佳音频；显式 `VIDEO_ONLY` 才会保留无声流
+- v0.3.1 起，`AUDIO_ONLY` 模式会优先使用调用方选择的音频 `format_id`；如未提供，则回退到 `bestaudio/best`
+- v0.3.1 起，下载完成需要可用的 `ffprobe` 才能返回最终媒体轨道信息
 - MissAV 当前实现依赖本机安装可用的 Chrome；如果 CLI 提示 MissAV browser fallback failed，请先确认该页面能在本机 Chrome 中正常打开
 - 用户配置文件默认保存在 Windows 的 `%APPDATA%\x-downloader\config.json`；当前可保存默认下载目录和默认 cookies 文件路径。命令行显式参数优先级高于配置文件
 - 当前已经实现 macOS / Windows / Linux 的 Chrome 数据目录探测；但这次只在 macOS 上做了真实验证，Windows / Linux 仍建议首次使用时实机检查

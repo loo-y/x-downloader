@@ -43,6 +43,39 @@ class ParserAndRunTests(unittest.TestCase):
         help_text = cli.build_parser().format_help()
         self.assertIn("Download videos from X/Twitter, YouTube, or MissAV", help_text)
         self.assertIn("X/Twitter, YouTube, or MissAV URL", help_text)
+        self.assertIn("--selection-mode", help_text)
+        self.assertIn("--format-id", help_text)
+
+    def test_build_download_request_maps_compatibility_flags(self) -> None:
+        args = cli.build_parser().parse_args(
+            [
+                "https://www.youtube.com/watch?v=test",
+                "--format-id",
+                "140",
+                "--audio-only",
+            ]
+        )
+
+        request = cli._build_download_request(args)
+
+        self.assertEqual(request.format_id, "140")
+        self.assertEqual(request.selection_mode, "AUDIO_ONLY")
+
+    def test_run_rejects_conflicting_selection_flags(self) -> None:
+        args = cli.build_parser().parse_args(
+            [
+                "https://www.youtube.com/watch?v=test",
+                "--audio-only",
+                "--video-only",
+            ]
+        )
+        stderr = io.StringIO()
+
+        with redirect_stderr(stderr):
+            exit_code = cli.run(args)
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("--audio-only and --video-only cannot be used together", stderr.getvalue())
 
     def test_run_without_url_prints_updated_guidance(self) -> None:
         args = cli.build_parser().parse_args([])

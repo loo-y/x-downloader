@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-from yt_dlp import DownloadError, YoutubeDL
+try:
+    from yt_dlp import DownloadError, YoutubeDL
+except ModuleNotFoundError:  # pragma: no cover - exercised only in dependency-missing environments.
+    class DownloadError(RuntimeError):
+        pass
+
+    YoutubeDL = None
 
 from .errors import CancelledError, CredentialError, DependencyError, DownloadFailure, ResolveError, ValidationError
 from .missav import (
@@ -17,7 +25,18 @@ from .missav import (
     resolve_video_source,
     select_quality_option,
 )
-from .types import CredentialCheck, DownloadProgress, DownloadRequest, DownloadResult, FormatOption, PlatformKey, ResolveRequest, ResolvedMedia, ensure_directory
+from .types import (
+    CredentialCheck,
+    DownloadProgress,
+    DownloadRequest,
+    DownloadResult,
+    FormatOption,
+    PlatformKey,
+    ResolveRequest,
+    ResolvedMedia,
+    SelectionMode,
+    ensure_directory,
+)
 
 SUPPORTED_HOSTS = {
     "x.com",
@@ -36,6 +55,14 @@ SUPPORTED_HOSTS = {
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}
 X_COOKIE_FIELDS = ("auth_token", "ct0", "twid")
 YOUTUBE_COOKIE_FIELDS = ("SID", "SAPISID", "__Secure-3PSID", "LOGIN_INFO")
+
+
+@dataclass(frozen=True)
+class DownloadPlan:
+    selected_format: FormatOption | None
+    format_expression: str | None
+    download_url: str
+    http_headers: dict[str, str] | None
 
 
 def validate_url(url: str) -> PlatformKey:
@@ -111,6 +138,7 @@ def validate_credential(platform: PlatformKey, cookie_file: str) -> CredentialCh
 
 def resolve_media(request: ResolveRequest) -> ResolvedMedia:
     platform = validate_url(request.url)
+    _require_yt_dlp()
     try:
         if platform == "missav":
             return resolve_missav_stream(request)
@@ -128,6 +156,7 @@ def download_media(
     cancellation_check: Callable[[], bool] | None = None,
 ) -> DownloadResult:
     platform = validate_url(request.url)
+    _require_yt_dlp()
     _validate_clip_args(request)
     output_dir = ensure_directory(request.output_dir)
     resolved = resolved_media or resolve_media(
@@ -156,11 +185,7 @@ def download_media(
         )
 
     selected_format = _select_format(resolved, request)
-    download_url = request.url
-    http_headers: dict[str, str] | None = None
-    if selected_format and selected_format.manifest_url:
-        download_url = selected_format.manifest_url
-        http_headers = selected_format.http_headers or None
+    plan = _build_download_plan(resolved, request, selected_format)
 
     class _Cancelled(Exception):
         pass
@@ -189,14 +214,14 @@ def download_media(
             )
         )
 
-    ydl_options = _build_ydl_options(request, output_dir=output_dir, http_headers=http_headers)
-    if selected_format and selected_format.format_id and not request.audio_only:
-        ydl_options["format"] = selected_format.format_id
+    ydl_options = _build_ydl_options(request, output_dir=output_dir, http_headers=plan.http_headers)
+    if plan.format_expression:
+        ydl_options["format"] = plan.format_expression
     ydl_options["progress_hooks"] = [_yt_progress]
 
     try:
         with YoutubeDL(ydl_options) as ydl:
-            info = ydl.extract_info(download_url, download=True)
+            info = ydl.extract_info(plan.download_url, download=True)
     except _Cancelled as exc:
         raise CancelledError() from exc
     except DownloadError as exc:
@@ -217,11 +242,12 @@ def download_media(
             raise DownloadFailure(str(exc)) from exc
 
     if progress_hook is not None:
+        final_size = final_path.stat().st_size if final_path.exists() else None
         progress_hook(
             DownloadProgress(
                 phase="finished",
-                downloaded_bytes=final_path.stat().st_size if final_path.exists() else None,
-                total_bytes=final_path.stat().st_size if final_path.exists() else None,
+                downloaded_bytes=final_size,
+                total_bytes=final_size,
                 speed_bytes_per_second=None,
                 eta_seconds=0.0,
                 percent=100.0,
@@ -229,18 +255,41 @@ def download_media(
             )
         )
 
+    probed = _probe_media(final_path)
+
     return DownloadResult(
         platform=platform,
         file_path=str(final_path),
         title=_coerce_string(info.get("title")) or resolved.title,
         display_id=_coerce_string(info.get("display_id")) or resolved.display_id,
-        mime_type=_guess_mime_type(final_path.suffix),
+        mime_type=_guess_mime_type(final_path.suffix, has_video=probed["has_video"], has_audio=probed["has_audio"]),
         ext=final_path.suffix[1:] if final_path.suffix else None,
-        size_bytes=final_path.stat().st_size if final_path.exists() else None,
+        has_video=probed["has_video"],
+        has_audio=probed["has_audio"],
+        video_codec=probed["video_codec"],
+        audio_codec=probed["audio_codec"],
+        width=probed["width"],
+        height=probed["height"],
+        fps=probed["fps"],
+        duration_seconds=probed["duration_seconds"],
+        size_bytes=probed["size_bytes"],
         info={
             "extractor": _coerce_string(info.get("extractor")),
             "id": _coerce_string(info.get("id")),
             "webpage_url": _coerce_string(info.get("webpage_url")) or request.url,
+            "selection_mode": request.selection_mode,
+            "format_id": selected_format.format_id if selected_format else request.format_id,
+            "probe": {
+                "has_video": probed["has_video"],
+                "has_audio": probed["has_audio"],
+                "video_codec": probed["video_codec"],
+                "audio_codec": probed["audio_codec"],
+                "width": probed["width"],
+                "height": probed["height"],
+                "fps": probed["fps"],
+                "duration_seconds": probed["duration_seconds"],
+                "size_bytes": probed["size_bytes"],
+            },
         },
     )
 
@@ -267,12 +316,15 @@ def resolve_missav_stream(request: ResolveRequest) -> ResolvedMedia:
             label=f"{option.height}p{f' ({option.label})' if option.label else ''}",
             ext="mp4",
             protocol="m3u8",
+            format_kind="MUXED",
             width=None,
             height=option.height,
             fps=None,
             video_codec=None,
             audio_codec=None,
-            filesize=None,
+            video_bitrate_kbps=None,
+            audio_bitrate_kbps=None,
+            file_size_bytes=None,
             manifest_url=option.manifest_url,
             http_headers=option.http_headers,
             quality_hint=option.label or None,
@@ -307,18 +359,28 @@ def _resolved_media_from_info(platform: PlatformKey, url: str, info: dict[str, o
                 _coerce_string(raw.get("ext")),
             ]
             label = " ".join(bit for bit in label_bits if bit) or (_coerce_string(raw.get("format")) or "Unknown")
+            audio_codec = _normalize_codec(_coerce_string(raw.get("acodec")))
+            video_codec = _normalize_codec(_coerce_string(raw.get("vcodec")))
             formats.append(
                 FormatOption(
                     format_id=_coerce_string(raw.get("format_id")) or "best",
                     label=label,
                     ext=_coerce_string(raw.get("ext")),
                     protocol=_coerce_string(raw.get("protocol")),
+                    format_kind=_detect_format_kind(
+                        video_codec=video_codec,
+                        audio_codec=audio_codec,
+                        width=_coerce_int(raw.get("width")),
+                        height=_coerce_int(raw.get("height")),
+                    ),
                     width=_coerce_int(raw.get("width")),
                     height=_coerce_int(raw.get("height")),
                     fps=_coerce_float(raw.get("fps")),
-                    video_codec=_coerce_string(raw.get("vcodec")),
-                    audio_codec=_coerce_string(raw.get("acodec")),
-                    filesize=_coerce_int(raw.get("filesize")) or _coerce_int(raw.get("filesize_approx")),
+                    video_codec=video_codec,
+                    audio_codec=audio_codec,
+                    video_bitrate_kbps=_coerce_float(raw.get("vbr")) or _estimate_video_bitrate_kbps(raw),
+                    audio_bitrate_kbps=_coerce_float(raw.get("abr")),
+                    file_size_bytes=_coerce_int(raw.get("filesize")) or _coerce_int(raw.get("filesize_approx")),
                 )
             )
     requires_auth = platform == "x"
@@ -346,6 +408,7 @@ def _extract_info(
     *,
     download: bool,
 ) -> dict[str, object]:
+    _require_yt_dlp()
     options = _build_ydl_options(
         request,
         output_dir=None,
@@ -379,7 +442,7 @@ def _build_ydl_options(
         "writeinfojson": False,
         "restrictfilenames": False,
         "merge_output_format": "mp4",
-        "format": "bestaudio/best" if getattr(request, "audio_only", False) else "bestvideo*+bestaudio/best",
+        "format": _default_format_expression(request.selection_mode),
     }
     opts = {key: value for key, value in opts.items() if value is not None}
 
@@ -428,7 +491,73 @@ def _select_format(resolved: ResolvedMedia, request: DownloadRequest) -> FormatO
         for option in missav_options:
             if option.format_id == selected.format_id:
                 return option
-    return resolved.formats[-1]
+    return _pick_default_format(resolved.formats, request.selection_mode)
+
+
+def _build_download_plan(
+    resolved: ResolvedMedia,
+    request: DownloadRequest,
+    selected_format: FormatOption | None,
+) -> DownloadPlan:
+    if selected_format is not None:
+        format_expression = _build_format_expression(request.selection_mode, selected_format)
+        download_url = selected_format.manifest_url or request.url
+        http_headers = selected_format.http_headers or None
+        return DownloadPlan(
+            selected_format=selected_format,
+            format_expression=format_expression,
+            download_url=download_url,
+            http_headers=http_headers,
+        )
+
+    return DownloadPlan(
+        selected_format=None,
+        format_expression=_default_format_expression(request.selection_mode),
+        download_url=request.url,
+        http_headers=None,
+    )
+
+
+def _build_format_expression(selection_mode: SelectionMode, option: FormatOption) -> str:
+    if selection_mode == "AUDIO_ONLY":
+        if option.format_kind != "AUDIO_ONLY":
+            raise ValidationError("AUDIO_ONLY downloads require an audio-only format_id.")
+        return option.format_id
+
+    if option.format_kind == "AUDIO_ONLY":
+        raise ValidationError("Audio-only formats cannot be used for video downloads.")
+
+    if selection_mode == "VIDEO_ONLY":
+        return option.format_id
+    if option.format_kind == "VIDEO_ONLY":
+        return f"{option.format_id}+bestaudio/best"
+    return option.format_id
+
+
+def _default_format_expression(selection_mode: SelectionMode) -> str:
+    if selection_mode == "AUDIO_ONLY":
+        return "bestaudio/best"
+    if selection_mode == "VIDEO_ONLY":
+        return "bestvideo/best"
+    return "bestvideo*+bestaudio/best"
+
+
+def _pick_default_format(formats: list[FormatOption], selection_mode: SelectionMode) -> FormatOption | None:
+    if selection_mode == "AUDIO_ONLY":
+        audio_only_options = [option for option in formats if option.format_kind == "AUDIO_ONLY"]
+        if audio_only_options:
+            return max(audio_only_options, key=_format_sort_key)
+        return None
+
+    video_options = [option for option in formats if option.format_kind != "AUDIO_ONLY"]
+    if not video_options:
+        return None
+
+    if selection_mode == "VIDEO_WITH_AUDIO":
+        muxed_options = [option for option in video_options if option.format_kind == "MUXED"]
+        if muxed_options:
+            return max(muxed_options, key=_format_sort_key)
+    return max(video_options, key=_format_sort_key)
 
 
 def _load_cookie_rows(path: Path) -> list[tuple[str, str, str]]:
@@ -493,7 +622,7 @@ def _clip_media(input_path: Path, request: DownloadRequest) -> Path:
     if request.clip_duration:
         command.extend(["-t", request.clip_duration])
 
-    if request.audio_only:
+    if request.selection_mode == "AUDIO_ONLY":
         command.extend(["-vn", "-c:a", "aac"])
     else:
         command.extend(
@@ -529,19 +658,155 @@ def _build_clip_output_path(input_path: Path, request: DownloadRequest) -> Path:
     dur_part = f"dur-{request.clip_duration}" if request.clip_duration else ""
     parts = [part for part in [f"start-{start}", end_part, dur_part] if part]
     suffix = ".".join(parts).replace(":", "-")
-    extension = ".m4a" if request.audio_only else ".mp4"
+    extension = ".m4a" if request.selection_mode == "AUDIO_ONLY" else ".mp4"
     return input_path.with_name(f"{input_path.stem}.clip.{suffix}{extension}")
 
 
-def _guess_mime_type(suffix: str) -> str | None:
+def _guess_mime_type(suffix: str, *, has_video: bool | None, has_audio: bool | None) -> str | None:
     lowered = suffix.lower()
     if lowered in {".mp4", ".m4v"}:
+        if has_video is False and has_audio:
+            return "audio/mp4"
         return "video/mp4"
     if lowered in {".m4a", ".aac"}:
         return "audio/mp4"
     if lowered == ".webm":
+        if has_video is False and has_audio:
+            return "audio/webm"
         return "video/webm"
     return None
+
+
+def _probe_media(file_path: Path) -> dict[str, object]:
+    if shutil.which("ffprobe") is None:
+        raise DependencyError("ffprobe is required to inspect downloaded media but was not found in PATH")
+
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(file_path),
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip() if exc.stderr else str(exc)
+        raise DownloadFailure(f"ffprobe inspection failed: {stderr}") from exc
+
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise DownloadFailure("ffprobe inspection returned invalid JSON.") from exc
+
+    streams = payload.get("streams")
+    format_info = payload.get("format")
+    if not isinstance(streams, list):
+        streams = []
+    if not isinstance(format_info, dict):
+        format_info = {}
+
+    video_stream = next(
+        (
+            stream
+            for stream in streams
+            if isinstance(stream, dict) and stream.get("codec_type") == "video"
+        ),
+        None,
+    )
+    audio_stream = next(
+        (
+            stream
+            for stream in streams
+            if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+        ),
+        None,
+    )
+
+    size_bytes = file_path.stat().st_size if file_path.exists() else None
+    format_size = _coerce_int(format_info.get("size"))
+    return {
+        "has_video": video_stream is not None,
+        "has_audio": audio_stream is not None,
+        "video_codec": _coerce_string(video_stream.get("codec_name")) if video_stream else None,
+        "audio_codec": _coerce_string(audio_stream.get("codec_name")) if audio_stream else None,
+        "width": _coerce_int(video_stream.get("width")) if video_stream else None,
+        "height": _coerce_int(video_stream.get("height")) if video_stream else None,
+        "fps": _parse_frame_rate(video_stream.get("avg_frame_rate")) if video_stream else None,
+        "duration_seconds": _coerce_float(format_info.get("duration")),
+        "size_bytes": format_size or size_bytes,
+    }
+
+
+def _detect_format_kind(
+    *,
+    video_codec: str | None,
+    audio_codec: str | None,
+    width: int | None,
+    height: int | None,
+) -> str:
+    has_video = bool(video_codec) or width is not None or height is not None
+    has_audio = bool(audio_codec)
+    if has_video and has_audio:
+        return "MUXED"
+    if has_video:
+        return "VIDEO_ONLY"
+    if has_audio:
+        return "AUDIO_ONLY"
+    return "MUXED"
+
+
+def _normalize_codec(value: str | None) -> str | None:
+    if value == "none":
+        return None
+    return value
+
+
+def _estimate_video_bitrate_kbps(raw: dict[str, object]) -> float | None:
+    total_bitrate = _coerce_float(raw.get("tbr"))
+    audio_bitrate = _coerce_float(raw.get("abr"))
+    if total_bitrate is None:
+        return None
+    if audio_bitrate is None:
+        return total_bitrate
+    return max(total_bitrate - audio_bitrate, 0.0)
+
+
+def _format_sort_key(option: FormatOption) -> tuple[float, float, float, float]:
+    return (
+        float(option.height or 0),
+        float(option.fps or 0),
+        float(option.video_bitrate_kbps or 0),
+        float(option.audio_bitrate_kbps or 0),
+    )
+
+
+def _parse_frame_rate(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, str) or not value or value == "0/0":
+        return None
+    if "/" in value:
+        numerator, denominator = value.split("/", 1)
+        try:
+            denominator_value = float(denominator)
+            if denominator_value == 0:
+                return None
+            return float(numerator) / denominator_value
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _require_yt_dlp() -> None:
+    if YoutubeDL is None:
+        raise DependencyError("yt-dlp is required but is not installed in the active Python environment")
 
 
 def _coerce_string(value: object) -> str | None:
