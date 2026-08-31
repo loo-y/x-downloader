@@ -45,6 +45,12 @@ xdl "https://x.com/<user>/status/<tweet_id>"
 python3 -m x_downloader.cli "https://x.com/<user>/status/<tweet_id>"
 ```
 
+### 方式三：服务端固定版本集成
+
+容器或服务端消费者应从 GitHub Release 安装固定版本 wheel，并在构建时校验 SHA-256；不要依赖 `main`、浮动 tag 或运行时 `pip install -U`。当前 NestDeck 使用 `v0.3.2`，该版本修复了 `ResolveRequest` 在识别阶段错误读取下载专用字段的问题。
+
+升级服务端版本时至少需要重新验证公共 API、NDJSON runner、X/YouTube/MissAV 解析，以及目标容器中的 yt-dlp、FFmpeg、Deno/Chromium 组合。
+
 ## 用法
 
 ## Python 公共 API（v0.3.2）

@@ -922,3 +922,99 @@
    - 至少要验证：
      - 最终命名不再退化成 `playlist` / `video` / `NA`
      - 下载成功后不再留下明显临时文件
+
+---
+
+# 2026-08-26 至 2026-08-29 v0.3.0–v0.3.2 服务化发布记录
+
+## 1. 本次阶段目标
+
+将 x-downloader 从以交互式 CLI 为主的工具提升为可被 NestDeck Video Worker 固定集成的公共运行库，同时保留原有 `xdl` 命令兼容性。阶段内连续发布 `v0.3.0`、`v0.3.1` 和兼容性修复 `v0.3.2`。
+
+## 2. 当前仓库状态
+
+- `main` / `origin/main` / tag `v0.3.2` 当前均指向 `3929343`。
+- 已发布 tag：`v0.3.0`、`v0.3.1`、`v0.3.2`。
+- 本地 `dist/` 为未跟踪构建产物，不能自动加入提交。
+- NestDeck 当前通过固定 Release URL 与 SHA-256 安装 `0.3.2` wheel。
+
+## 3. 实际问题
+
+- NestDeck 不能稳定解析 CLI 文本或原始 yt-dlp stderr，也不能让 Cookie、代理密码、临时媒体 URL 混入普通日志。
+- 服务调用需要非交互格式选择、progress hook、取消检查、显式 Cookie/代理和结构化异常。
+- 常见 Netscape cookies.txt 会把真实 HttpOnly 行写成 `#HttpOnly_...`；按普通注释丢弃会让 X 的 `auth_token` 消失。
+- 下载前格式声明无法可靠说明最终文件是否真的有音轨，只有 ffprobe 才能给出最终事实。
+- `v0.3.1` 重构后，共享 yt-dlp options 构建错误读取 `ResolveRequest.selection_mode`。该字段只存在于 `DownloadRequest`，因此本地 CLI 和 NestDeck 的链接识别都抛出 `AttributeError`。
+
+## 4. 原因与结论
+
+- 公共 Python API 与结构化类型是长期服务边界；CLI 只应是薄包装。
+- Resolve 只负责发现元数据和格式，不能混入下载选择策略；给 `ResolveRequest` 补一个虚假的 `selection_mode` 会掩盖类型边界错误。
+- `VIDEO_ONLY` 是格式组成，不等于用户一定要无声文件。默认 `VIDEO_WITH_AUDIO` 应将所选视频流与最佳音频合并；只有显式 `VIDEO_ONLY` 才保留无声流。
+- 下载后媒体轨道、编码、尺寸和时长必须以 ffprobe 结果为准。
+
+## 5. 已落地内容
+
+### v0.3.0 (`07b1ecd`，并含 `b88d4ea` Cookie 修复)
+
+- 新增 `api.py`、`types.py`、`errors.py` 和 `nestdeck_runner.py`。
+- 公共入口：`validate_url()`、`validate_credential()`、`resolve_media()`、`download_media()`、`resolve_missav_stream()`。
+- 稳定类型：`ResolveRequest`、`ResolvedMedia`、`FormatOption`、`DownloadRequest`、`DownloadResult`、`CredentialCheck`。
+- runner 使用 stdin 单条 JSON、stdout NDJSON；支持 metadata/progress/completed/error。
+- MissAV 支持显式 Chromium 路径和容器模式；CLI 保持兼容。
+- License 设为 MIT；服务模式接受 `#HttpOnly_` Netscape Cookie 行。
+
+### v0.3.1 (`5787560`)
+
+- `FormatOption` 增加 `format_kind`、音视频 codec/bitrate、宽高、fps 和预估大小。
+- `DownloadRequest.selection_mode` 明确为 `VIDEO_WITH_AUDIO`、`VIDEO_ONLY`、`AUDIO_ONLY`。
+- video-only 格式在默认模式下使用所选 `format_id+bestaudio/best`；精确音频选择不再被忽略。
+- 下载后调用 ffprobe 返回实际轨道、编码、尺寸、时长与大小。
+- runner 输出同步扩展，供 NestDeck 多规格资产模型使用。
+
+### v0.3.2 (`3929343`)
+
+- options 构建只在请求确属 `DownloadRequest` 时读取 `selection_mode`。
+- 恢复 CLI 与所有服务消费者的链接识别，不改变 `v0.3.1` 公共格式语义。
+- README 升级为 v0.3.2 公共 API 文档；补充本次 release notes。
+
+## 6. 验证事实
+
+- v0.3.0：14 个 unittest 通过，wheel 构建与 SHA-256 校验通过；HttpOnly 修复后 15 个测试通过。
+- v0.3.1：22 个 unittest 通过，并从干净临时副本成功构建 wheel。
+- v0.3.2：`tests/test_api.py` 6/6 通过；全部 24 个测试到达通过断言，但 Windows 下既有后台句柄可能延迟测试进程退出。
+- v0.3.2 发布前按用户要求没有执行真实网络下载；之后 NestDeck 用户侧确认 X 下载功能恢复。
+
+## 7. 坑点与约束
+
+- 不要解析 CLI 文本作为服务协议；使用公共 API 或 `nestdeck_runner` NDJSON。
+- 不要把 signed media URL、Cookie、代理认证或完整 yt-dlp options 写进正常日志。
+- 不要把下载策略字段放入 `ResolveRequest`；共享 helper 读取字段前必须按请求类型分支。
+- 不要丢弃 `#HttpOnly_` 开头的 Netscape Cookie 数据行。
+- 不要在运行容器内执行 `yt-dlp -U` 或浮动安装 x-downloader；发布消费者必须固定 wheel 与校验和。
+
+## 8. 接手方式
+
+1. 先读 `README.md`、`src/x_downloader/types.py`、`api.py` 和 `nestdeck_runner.py`。
+2. 保持本地 `dist/` 不入库，构建发布资产前用干净目录。
+3. 运行现有测试并重点检查：ResolveRequest 不读取下载字段、三种 selection mode、ffprobe 结果和 runner NDJSON。
+4. 若要发布新版本，先更新 `pyproject.toml`、`__init__.__version__`、README 与对应 release notes，再构建 wheel 并记录 SHA-256。
+5. NestDeck 升级应另开依赖提交，更新两个 Dockerfile 的固定 URL、文件名、版本断言和 SHA。
+
+## 9. 当前边界
+
+- MissAV 仍依赖 Chromium 和目标站点结构，属于易变适配路径。
+- 公共 API 不承诺播放列表、批量下载或任意 yt-dlp 参数透传。
+- Windows 测试进程的后台句柄延迟退出尚未单独根治。
+- 真实平台可用性受 Cookie、地区、账号权限和 yt-dlp 上游变化影响。
+
+## 10. 最终产品目标
+
+x-downloader 应同时保持简单 CLI 和稳定服务库两种身份：个人用户可以继续执行 `xdl <url>`；NestDeck 等服务消费者通过固定、可测试、可脱敏的 Python/NDJSON 合约运行，不依赖宿主机浏览器配置或非结构化输出。
+
+## 11. 后续 TODO
+
+1. 为 Windows 后台句柄问题增加可重复的最小用例，避免测试实际通过但进程不退出。
+2. 在下一次 yt-dlp 依赖升级时完成 X、YouTube、MissAV 的真实短媒体回归。
+3. 为 runner 增加更多异常映射回归，继续保证 stderr 限长与 secret 脱敏。
+4. 新版本发布后同步 NestDeck 固定 wheel URL/SHA，不允许两个仓库版本漂移。
